@@ -1,0 +1,20 @@
+{
+    "name": "@wae/open-debugger-skills",
+    "version": "0.0.0",
+    "description": "Agent skills for the OpenDebugger CLI",
+    "license": "Apache-2.0",
+    "files": [
+        "skills",
+        "README.md",
+        "License.md"
+    ],
+    "keywords": [
+        "agent-skills",
+        "open-debugger",
+        "crash-dump"
+    ],
+    "engines": {
+        "node": ">=18"
+    },
+    "repository": "https://github.com/nyar-os/OpenDebugger"
+}

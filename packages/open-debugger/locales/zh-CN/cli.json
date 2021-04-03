@@ -1,0 +1,28 @@
+{
+    "cli": {
+        "intro": "OpenDebugger — 分析 Windows 崩溃转储、解析 bugcheck 代码并导出报告。",
+        "cmd": {
+            "analyze": "解析 Windows minidump 或内核转储并打印摘要",
+            "bugcheck": "在内置表中解析 bugcheck 代码",
+            "capabilities": "以 JSON 打印当前平台能力",
+            "report": "把解析报告写入文件",
+            "audit": "以 JSON 行打印追加式能力审计历史",
+            "gui": "打开 GUI 窗口",
+            "version": "打印包版本"
+        },
+        "opt": {
+            "json": "输出机器可读 JSON",
+            "limit": "人类可读输出中最多打印的模块数",
+            "auditLimit": "最多打印的审计记录条数",
+            "out": "`report` 写出的报告文件路径",
+            "dryRun": "只校验请求并打印将写入的内容，不触碰文件系统",
+            "title": "GUI 窗口标题",
+            "contentDir": "包含 index.html 的 GUI 内容目录",
+            "actor": "记录到每次能力调用的 actor id（默认读取 WAE_ACTOR_ID）",
+            "actorKind": "actor 类型：user 或 agent（默认读取 WAE_ACTOR_KIND）",
+            "actorSource": "actor 入口来源，例如 cli、gui、plugin（默认 cli）",
+            "actorFilter": "只显示该 actor id 的审计记录",
+            "capability": "只显示该能力名的审计记录"
+        }
+    }
+}

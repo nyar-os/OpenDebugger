@@ -1,0 +1,28 @@
+{
+    "cli": {
+        "intro": "OpenDebugger — analyze Windows crash dumps, resolve bugcheck codes, and export reports.",
+        "cmd": {
+            "analyze": "Parse a Windows minidump or kernel dump and print its summary",
+            "bugcheck": "Resolve a bugcheck code against the built-in table",
+            "capabilities": "Print platform capabilities as JSON",
+            "report": "Write the parsed dump report to a file",
+            "audit": "Print the append-only capability audit history as JSON lines",
+            "gui": "Open the GUI window",
+            "version": "Print the package version"
+        },
+        "opt": {
+            "json": "Print machine-readable JSON",
+            "limit": "Max modules to print in human output",
+            "auditLimit": "Max audit records to print",
+            "out": "Report file path written by `report`",
+            "dryRun": "Validate the request and print the intended write without touching the filesystem",
+            "title": "GUI window title",
+            "contentDir": "GUI content folder containing index.html",
+            "actor": "Actor id recorded for every capability call (default: WAE_ACTOR_ID)",
+            "actorKind": "Actor kind: user or agent (default: WAE_ACTOR_KIND)",
+            "actorSource": "Actor entry point, for example cli, gui, plugin (default: cli)",
+            "actorFilter": "Only show audit records for this actor id",
+            "capability": "Only show audit records for this capability name"
+        }
+    }
+}

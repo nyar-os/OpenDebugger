@@ -1,0 +1,423 @@
+<template>
+    <div data-open-debugger="root" class="od-root" data-theme="dark">
+        <AppShell brand="OpenDebugger" homeHref="/" navLabel="Navigation" activeId="analyze" :nav="navItems">
+            <div class="vmz-slot-content od-body">
+                <header class="od-head">
+                    <h1>
+                        {{ title }}
+                    </h1>
+                    <p>
+                        {{ lead }}
+                    </p>
+                </header>
+                <Card :title="analyzeCardTitle" :description="analyzeCardDesc">
+                    <Field
+                        :label="dumpLabel"
+                        :description="dumpDesc"
+                        controlId="od-dump"
+                        descriptionId="od-dump-desc"
+                        errorId="od-dump-err"
+                        describedBy="od-dump-desc"
+                        :value="dumpPath"
+                        :placeholder="dumpPlaceholder"
+                        @input="onDumpInput"
+                    />
+                    <div class="od-actions">
+                        <Button type="button" :loading="analyzing" :disabled="analyzing" @click="analyze">
+                            {{ analyzeLabel }}
+                        </Button>
+                        <Button type="button" variant="secondary" @click="requestClose">
+                            {{ closeLabel }}
+                        </Button>
+                    </div>
+                    <Alert v-if="error" tone="danger" roleName="alert" :title="errorTitle" :description="error" />
+                    <Alert v-else-if="status" tone="info" roleName="status" :title="statusTitle" :description="status" />
+                </Card>
+                <Card :title="reportCardTitle" :description="reportCardDesc">
+                    <div class="od-stats">
+                        <div class="od-stat">
+                            <div class="od-stat__label">
+                                {{ formatLabel }}
+                            </div>
+                            <div class="od-stat__value">
+                                {{ formatText }}
+                            </div>
+                        </div>
+                        <div class="od-stat">
+                            <div class="od-stat__label">
+                                {{ sizeLabel }}
+                            </div>
+                            <div class="od-stat__value">
+                                {{ sizeText }}
+                            </div>
+                        </div>
+                        <div class="od-stat">
+                            <div class="od-stat__label">
+                                {{ moduleCountLabel }}
+                            </div>
+                            <div class="od-stat__value">
+                                {{ moduleCountText }}
+                            </div>
+                        </div>
+                        <div class="od-stat">
+                            <div class="od-stat__label">
+                                {{ threadCountLabel }}
+                            </div>
+                            <div class="od-stat__value">
+                                {{ threadCountText }}
+                            </div>
+                        </div>
+                    </div>
+                    <p v-if="bugcheckLine" class="od-bugcheck">
+                        {{ bugcheckLine }}
+                    </p>
+                    <Empty v-if="!moduleRows.length && !analyzing" :title="emptyTitle" :description="emptyDesc" />
+                    <Table
+                        v-else
+                        :columns="moduleColumns"
+                        :rows="moduleRows"
+                        :loading="analyzing"
+                        :loadingLabel="loadingLabel"
+                        :loadingText="loadingText"
+                        :hasRowAction="false"
+                    />
+                </Card>
+                <Card :title="bugcheckCardTitle" :description="bugcheckCardDesc">
+                    <Field
+                        :label="codeLabel"
+                        :description="codeDesc"
+                        controlId="od-code"
+                        descriptionId="od-code-desc"
+                        errorId="od-code-err"
+                        describedBy="od-code-desc"
+                        :value="code"
+                        :placeholder="codePlaceholder"
+                        @input="onCodeInput"
+                    />
+                    <div class="od-actions">
+                        <Button type="button" :loading="lookingUp" :disabled="lookingUp" @click="lookup">
+                            {{ lookupLabel }}
+                        </Button>
+                    </div>
+                    <p v-if="bugcheckName" class="od-bugcheck">
+                        {{ bugcheckName }}
+                    </p>
+                    <p v-if="bugcheckSummary" class="od-note">
+                        {{ bugcheckSummary }}
+                    </p>
+                    <ul v-if="bugcheckCauses.length" class="od-causes">
+                        <li v-for="cause in bugcheckCauses" :key="cause">
+                            {{ cause }}
+                        </li>
+                    </ul>
+                </Card>
+                <Card :title="capabilitiesCardTitle" :description="capabilitiesCardDesc">
+                    <Table
+                        :columns="capabilityColumns"
+                        :rows="capabilityRows"
+                        :loading="loadingCapabilities"
+                        :loadingLabel="loadingLabel"
+                        :loadingText="loadingText"
+                        :hasRowAction="false"
+                    />
+                </Card>
+            </div>
+        </AppShell>
+    </div>
+</template>
+<style>
+.od-root {
+    min-height: 100vh;
+}
+.od-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--vmz-space-4, 1rem);
+    width: min(var(--vmz-layout-max-width, 80rem), calc(100% - (var(--vmz-layout-gutter, 1rem) * 2)));
+    margin: 0 auto;
+}
+.od-head h1 {
+    margin: 0 0 0.35rem;
+    font-size: 1.35rem;
+}
+.od-head p {
+    margin: 0;
+    color: var(--vmz-text-steel, var(--vmz-text-muted, #8b93a7));
+}
+.od-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--vmz-space-2, 0.5rem);
+    margin-top: var(--vmz-space-3, 0.75rem);
+}
+.od-stats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--vmz-space-3, 0.75rem);
+    margin-bottom: var(--vmz-space-4, 1rem);
+}
+.od-stat {
+    padding: var(--vmz-space-3, 0.75rem);
+    border: 1px solid var(--vmz-line-default, #2a3140);
+    border-radius: var(--vmz-radius-md, 8px);
+    background: var(--vmz-surface-mist, var(--vmz-surface-paper, #1a1e27));
+}
+.od-stat__label {
+    color: var(--vmz-text-steel, #8b93a7);
+    font-size: 0.75rem;
+}
+.od-stat__value {
+    margin-top: 0.25rem;
+    font-variant-numeric: tabular-nums;
+    font-size: 1.1rem;
+}
+.od-bugcheck {
+    margin: 0 0 var(--vmz-space-2, 0.5rem);
+    font-family: var(--vmz-font-mono, ui-monospace, Consolas, monospace);
+    font-size: 0.9rem;
+}
+.od-note {
+    margin: 0 0 var(--vmz-space-2, 0.5rem);
+    color: var(--vmz-text-steel, #8b93a7);
+}
+.od-causes {
+    margin: 0;
+    padding-left: var(--vmz-space-5, 1.25rem);
+    color: var(--vmz-text-steel, #8b93a7);
+}
+@media (max-width: 900px) {
+    .od-stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+@media (max-width: 560px) {
+    .od-stats {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+<script client>
+export default class IndexPage {
+    title = "OpenDebugger";
+    lead = "Analyze Windows crash dumps, look up bugcheck codes, and review module and capability data.";
+    navItems = [{ id: "analyze", title: "Analyze", href: "/" }];
+    analyzeCardTitle = "Dump analysis";
+    analyzeCardDesc = "Point at a minidump or kernel dump file on this machine.";
+    dumpLabel = "Dump file";
+    dumpDesc = "Absolute path to a .dmp file.";
+    dumpPlaceholder = "C:\\Windows\\Minidump\\example.dmp";
+    analyzeLabel = "Analyze";
+    closeLabel = "Close";
+    errorTitle = "Operation failed";
+    statusTitle = "Status";
+    reportCardTitle = "Dump report";
+    reportCardDesc = "Modules and threads read from the last dump.";
+    formatLabel = "Format";
+    sizeLabel = "Size";
+    moduleCountLabel = "Modules";
+    threadCountLabel = "Threads";
+    emptyTitle = "No dump loaded";
+    emptyDesc = "Run an analysis to populate the report.";
+    loadingLabel = "Working";
+    loadingText = "Reading dump…";
+    bugcheckCardTitle = "Bugcheck code";
+    bugcheckCardDesc = "Resolve a bugcheck code against the built-in table.";
+    codeLabel = "Code";
+    codeDesc = "Decimal or hexadecimal, for example 0x000000EF.";
+    codePlaceholder = "0x000000EF";
+    lookupLabel = "Look up";
+    capabilitiesCardTitle = "Capabilities";
+    capabilitiesCardDesc = "What this build can do on the current host.";
+    moduleColumns = [
+        { id: "name", title: "Module" },
+        { id: "base", title: "Base", align: "left" },
+        { id: "size", title: "Size", align: "right" },
+    ];
+    capabilityColumns = [
+        { id: "capability", title: "Capability" },
+        { id: "state", title: "State" },
+        { id: "detail", title: "Detail" },
+    ];
+
+    dumpPath = "";
+    code = "0x000000EF";
+    analyzing = false;
+    lookingUp = false;
+    loadingCapabilities = false;
+    error = "";
+    status = "Ready.";
+    formatText = "—";
+    sizeText = "—";
+    moduleCountText = "—";
+    threadCountText = "—";
+    bugcheckLine = "";
+    bugcheckName = "";
+    bugcheckSummary = "";
+    bugcheckCauses = [];
+    moduleRows = [];
+    capabilityRows = [];
+    _seq = 0;
+
+    onMount() {
+        this.installHostBridge();
+        const bridge = this.bridge();
+        if (bridge) this.requestCapabilities();
+    }
+
+    bridge() {
+        const webview = globalThis.chrome && globalThis.chrome.webview;
+        return webview && webview.postMessage ? webview : null;
+    }
+
+    onDumpInput(e) {
+        this.dumpPath = e && e.target ? String(e.target.value || "") : "";
+    }
+
+    onCodeInput(e) {
+        this.code = e && e.target ? String(e.target.value || "") : "";
+    }
+
+    installHostBridge() {
+        const webview = this.bridge();
+        if (!webview || !webview.addEventListener) return;
+        webview.addEventListener("message", (event) => {
+            let data = event.data;
+            if (typeof data === "string") {
+                try {
+                    data = JSON.parse(data);
+                } catch {
+                    return;
+                }
+            }
+            if (!data || typeof data !== "object") return;
+            if (data.type === "capabilitiesResult") this.applyCapabilities(data.capabilities || {});
+            else if (data.type === "capabilitiesError") {
+                this.loadingCapabilities = false;
+                this.setError(String(data.message || "unknown error"));
+            } else if (data.type === "analyzeResult") {
+                this.analyzing = false;
+                this.error = "";
+                this.applyReport(data.report || {});
+                this.status = "Analysis complete.";
+            } else if (data.type === "analyzeError") {
+                this.analyzing = false;
+                this.setError(String(data.message || "unknown error"));
+            } else if (data.type === "bugcheckResult") {
+                this.lookingUp = false;
+                this.error = "";
+                this.applyBugcheck(data.info || {});
+                this.status = "Bugcheck resolved.";
+            } else if (data.type === "bugcheckError") {
+                this.lookingUp = false;
+                this.setError(String(data.message || "unknown error"));
+            }
+        });
+    }
+
+    setError(message) {
+        this.error = message;
+        this.status = "";
+    }
+
+    post(msg) {
+        const webview = this.bridge();
+        if (!webview) {
+            this.setError("Native bridge unavailable (not running inside the WebView2 host).");
+            return false;
+        }
+        webview.postMessage(JSON.stringify(msg));
+        return true;
+    }
+
+    requestCapabilities() {
+        this._seq += 1;
+        this.loadingCapabilities = true;
+        if (!this.post({ type: "capabilities", id: this._seq })) this.loadingCapabilities = false;
+    }
+
+    analyze() {
+        const path = (this.dumpPath || "").trim();
+        if (!path) {
+            this.setError("Enter the path of a dump file before analyzing.");
+            return;
+        }
+        this._seq += 1;
+        this.analyzing = true;
+        this.error = "";
+        this.status = "Analyzing…";
+        if (!this.post({ type: "analyze", id: this._seq, path })) this.analyzing = false;
+    }
+
+    lookup() {
+        const code = (this.code || "").trim();
+        if (!code) {
+            this.setError("Enter a bugcheck code before looking it up.");
+            return;
+        }
+        this._seq += 1;
+        this.lookingUp = true;
+        this.error = "";
+        this.status = "Resolving bugcheck code…";
+        if (!this.post({ type: "bugcheck", id: this._seq, code })) this.lookingUp = false;
+    }
+
+    requestClose() {
+        this.post({ type: "close" });
+    }
+
+    applyReport(report) {
+        this.formatText = String(report.format || "—");
+        this.sizeText = this.formatBytes(Number(report.sizeBytes) || 0);
+        const modules = Array.isArray(report.modules) ? report.modules : [];
+        const threads = Array.isArray(report.threads) ? report.threads : [];
+        this.moduleCountText = String(modules.length);
+        this.threadCountText = String(threads.length);
+        if (report.bugcheck) {
+            const b = report.bugcheck;
+            this.bugcheckLine = `${b.codeHex || "unknown"} ${b.name || "unknown bugcheck"}`;
+        }
+        else if (report.exception) {
+            const e = report.exception;
+            this.bugcheckLine = `exception ${e.code} at ${e.address} (thread ${e.threadId})`;
+        }
+        else this.bugcheckLine = "";
+        this.moduleRows = modules.map((entry, index) => ({
+            id: String(index),
+            cells: [String(entry.name || ""), String(entry.baseAddress || ""), this.formatBytes(Number(entry.sizeBytes) || 0)],
+        }));
+    }
+
+    applyBugcheck(info) {
+        if (!info.known) {
+            this.bugcheckName = `${info.codeHex || "unknown"} unknown bugcheck code`;
+            this.bugcheckSummary = "";
+            this.bugcheckCauses = [];
+            return;
+        }
+        this.bugcheckName = `${info.codeHex} ${info.name}`;
+        this.bugcheckSummary = String(info.summary || "");
+        this.bugcheckCauses = Array.isArray(info.commonCauses) ? info.commonCauses.map((cause) => String(cause)) : [];
+    }
+
+    applyCapabilities(report) {
+        this.loadingCapabilities = false;
+        const entries = Array.isArray(report.entries) ? report.entries : [];
+        this.capabilityRows = entries.map((entry) => ({
+            id: String(entry.capability || ""),
+            cells: [
+                String(entry.capability || ""),
+                entry.available ? "available" : String(entry.code || "blocked"),
+                String(entry.detail || ""),
+            ],
+        }));
+        this.status = `Host ${report.platform || "unknown"}-${report.architecture || "unknown"}.`;
+    }
+
+    formatBytes(n) {
+        if (n < 1024) return `${n} B`;
+        if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
+        if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+        return `${(n / 1024 ** 3).toFixed(2)} GB`;
+    }
+}
+</script>

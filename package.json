@@ -1,15 +1,22 @@
 {
-    "name": "notedown-workspace",
+    "name": "@wae/open-debugger-workspace",
     "private": true,
+    "type": "module",
+    "packageManager": "pnpm@10.28.0",
+    "description": "OpenDebugger workspace (crates = Rust, packages = TypeScript)",
+    "license": "Apache-2.0",
     "scripts": {
-        "pest": "cd projects/sdl-pest && wee pest -t",
-        "build": "cargo build --release",
-        "test": "cargo test --release",
-        "fmt": "cargo fmt --all",
-        "push": "yarn test && git push",
-        "reset": "git reset Head~ --soft",
-        "pub": "cargo-publish-all --yes --allow-dirty",
-        "zola": "cargo build --release --color=always --package notedown_zola",
-        "vsc": "cd projects/notedown-vscode && wasm-pack build --target nodejs && wasm-pack publish"
+        "build:napi": "node --experimental-strip-types scripts/build-napi.ts",
+        "build:ts": "pnpm --filter @wae/open-debugger run build",
+        "build:ui": "pnpm --filter @wae/open-debugger-ui run build && pnpm --filter @wae/open-debugger-ui run stage",
+        "build": "pnpm run build:napi && pnpm run build:ts && pnpm run build:ui",
+        "stage:native": "node --experimental-strip-types scripts/stage-native.ts",
+        "check:skills": "node --experimental-strip-types scripts/check-skills.ts",
+        "check:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
+        "gui": "pnpm run build && pnpm --filter @wae/open-debugger exec node ./dist/cli.js gui"
+    },
+    "devDependencies": {
+        "@types/node": "^22.20.4",
+        "typescript": "^5.9.2"
     }
 }
