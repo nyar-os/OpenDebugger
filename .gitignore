@@ -18,6 +18,13 @@ dist/
 *.node
 *.wasm
 
+# Local npm 2FA (never commit)
+.env.placeholder.local
+.env*.local
+
+# Nifty local cache
+.cache/
+
 # VMZ
 packages/open-debugger-ui/.cache/
 

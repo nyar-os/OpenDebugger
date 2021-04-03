@@ -1,0 +1,55 @@
+name: publish-npm
+
+# Trusted Publisher contract (sole npm trusted workflow — keep this filename):
+#   file = publish-npm.yml
+#   repo = nyar-os/OpenDebugger
+#   env  = NPM_PUBLISH
+#
+# Real `@wae/open-debugger*` versions publish only through npm Trusted Publisher
+# (OIDC) on tag push. Local `nifty publish --placeholder` is only for 0.0.0 stubs.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag (for example v0.0.1). Its version is published."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    environment: NPM_PUBLISH
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24.12.0"
+          package-manager-cache: false
+      - name: Upgrade npm for Trusted Publisher support
+        run: npm install --global npm@11
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Build native and TypeScript
+        run: pnpm run build:napi && pnpm run build:ts
+      - name: Publish packages to npm
+        shell: bash
+        run: pnpm exec nifty publish --access public --version="${RELEASE_TAG#v}"
