@@ -1,9 +1,10 @@
 //! Kernel triage dump layout: faulting context, crash stack block, and the module table.
 //!
 //! A triage dump does not carry page tables, so a generic virtual-to-physical walk is not
-//! possible. What it does carry is a header describing the blocks that were captured. Those
-//! blocks are located through the descriptor area that follows the 64-bit dump header, and
-//! every descriptor is validated against the faulting context before it is used.
+//! possible. What it does carry is a record of the virtual ranges that were captured: the
+//! descriptor area after the 64-bit header locates the faulting stack block, and a table of
+//! `(virtual address, file offset, size)` records maps the remaining captured ranges. Every
+//! descriptor and record is validated before it is used.
 
 use std::{
     fs::File,
@@ -35,6 +36,10 @@ const MAX_MODULE_NAME_CHARS: u32 = 260;
 const MAX_MODULE_SIZE: u32 = 0x4000_0000;
 const MAX_STACK_BYTES: u32 = 0x0040_0000;
 const MIN_MODULE_RECORDS: usize = 8;
+const BLOCK_RECORD_STRIDE: u64 = 0x10;
+const MAX_BLOCK_RECORDS: u32 = 8192;
+const MAX_BLOCK_SIZE: u32 = 0x0040_0000;
+const MIN_BLOCK_RECORDS: usize = 4;
 
 pub(crate) struct KernelModule {
     pub name: String,
@@ -56,12 +61,39 @@ pub(crate) struct StackBlock {
     pub size: u32,
 }
 
+/// A virtual address range that this dump stores at a known file offset.
+pub(crate) struct TriageBlock {
+    pub va: u64,
+    pub file_offset: u64,
+    pub size: u32,
+}
+
+impl TriageBlock {
+    pub(crate) fn contains(&self, address: u64) -> bool {
+        address >= self.va && address - self.va < u64::from(self.size)
+    }
+}
+
 pub(crate) struct Triage {
     pub context_rip: u64,
     pub pfn_database_base: Option<u64>,
     pub stack_block: Option<StackBlock>,
     pub modules: Vec<KernelModule>,
+    /// Captured virtual ranges, used to tell whether an address has content in this dump.
+    pub blocks: Vec<TriageBlock>,
     pub warnings: Vec<String>,
+}
+
+impl Triage {
+    /// Reads `size` bytes at `address` from the captured range that contains it.
+    pub(crate) fn read(&self, input: &Input, address: u64, size: u32) -> Option<Vec<u8>> {
+        let block = self.blocks.iter().find(|block| block.contains(address))?;
+        let delta = address - block.va;
+        if delta + u64::from(size) > u64::from(block.size) {
+            return None;
+        }
+        input.read(block.file_offset + delta, size)
+    }
 }
 
 /// Reads the triage header and returns the mapped stack block plus the loaded module table.
@@ -79,9 +111,68 @@ pub(crate) fn parse(input: &Input) -> Option<Triage> {
     let mut warnings = Vec::new();
     let stack_block = locate_stack_block(input, context_rsp, &mut warnings);
     let modules = locate_module_table(input, &mut warnings).unwrap_or_default();
+    let mut blocks = locate_block_table(input, &mut warnings);
+    if let Some(stack) = stack_block.as_ref()
+        && !blocks.iter().any(|block| block.contains(stack.va))
+    {
+        blocks.push(TriageBlock { va: stack.va, file_offset: stack.file_offset, size: stack.size });
+    }
     let pfn_database_base = read_u64(input, 0x18).filter(|value| *value >= KERNEL_BASE_MIN);
 
-    Some(Triage { context_rip, pfn_database_base, stack_block, modules, warnings })
+    Some(Triage { context_rip, pfn_database_base, stack_block, modules, blocks, warnings })
+}
+
+/// Finds the descriptor that expands into the table of captured virtual ranges.
+///
+/// Each record is a `u64` virtual address followed by a `u32` file offset and a `u32` byte
+/// count, and consecutive records tile the file. Reading the same virtual addresses through
+/// a debugger returns the bytes at the recorded offsets, which confirms the layout.
+fn locate_block_table(input: &Input, warnings: &mut Vec<String>) -> Vec<TriageBlock> {
+    let mut best: Vec<TriageBlock> = Vec::new();
+    let mut position = TRIAGE_OFFSET;
+    while position + 8 <= DESCRIPTOR_END {
+        let Some(file_offset) = read_u32(input, position)
+        else {
+            break;
+        };
+        let Some(count) = read_u32(input, position + 4)
+        else {
+            break;
+        };
+        let in_bounds = u64::from(file_offset).saturating_add(u64::from(count) * BLOCK_RECORD_STRIDE) <= input.len();
+        if (1..=MAX_BLOCK_RECORDS).contains(&count)
+            && in_bounds
+            && let Some(blocks) = parse_block_records(input, u64::from(file_offset), count)
+            && blocks.len() > best.len()
+        {
+            best = blocks;
+        }
+        position += 4;
+    }
+    if best.is_empty() {
+        warnings.push("no triage descriptor expands into a captured memory block table".to_string());
+    }
+    best
+}
+
+fn parse_block_records(input: &Input, table_offset: u64, count: u32) -> Option<Vec<TriageBlock>> {
+    let mut blocks: Vec<TriageBlock> = Vec::with_capacity(count as usize);
+    for index in 0..u64::from(count) {
+        let record = table_offset + index * BLOCK_RECORD_STRIDE;
+        let va = read_u64(input, record)?;
+        let file_offset = u64::from(read_u32(input, record + 8)?);
+        let size = read_u32(input, record + 0x0C)?;
+        if va < KERNEL_BASE_MIN || size == 0 || size > MAX_BLOCK_SIZE || file_offset.saturating_add(u64::from(size)) > input.len() {
+            return None;
+        }
+        if let Some(previous) = blocks.last()
+            && previous.file_offset + u64::from(previous.size) != file_offset
+        {
+            return None;
+        }
+        blocks.push(TriageBlock { va, file_offset, size });
+    }
+    (blocks.len() >= MIN_BLOCK_RECORDS).then_some(blocks)
 }
 
 /// Finds the descriptor whose recorded virtual address equals `CONTEXT.Rsp`.

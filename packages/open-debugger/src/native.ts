@@ -46,6 +46,8 @@ export type StackReference = {
 export type PhysicalPage = {
     pfn: number;
     databaseEntry?: string;
+    /** Raw bytes at the start of the `MMPFN` entry, not decoded into fields. */
+    entryBytes?: string;
     /** False when the triage dump does not map the PFN database page. */
     inDump: boolean;
 };

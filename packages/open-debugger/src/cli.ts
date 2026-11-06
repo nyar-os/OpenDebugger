@@ -130,7 +130,8 @@ function printDumpReport(report: DumpReport, limit: number): void {
         const page = report.physicalPage;
         const entry = page.databaseEntry ?? 'unknown entry';
         const mapped = page.inDump ? 'mapped by this dump' : 'not mapped by this dump';
-        console.log(`physical page: PFN 0x${page.pfn.toString(16).toUpperCase()} at ${entry} (${mapped})`);
+        const raw = page.entryBytes ? `, entry bytes ${page.entryBytes}` : '';
+        console.log(`physical page: PFN 0x${page.pfn.toString(16).toUpperCase()} at ${entry} (${mapped}${raw})`);
     }
     for (const warning of report.warnings) console.log(`warning: ${warning}`);
 }

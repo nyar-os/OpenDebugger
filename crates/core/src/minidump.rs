@@ -130,6 +130,9 @@ pub struct PhysicalPage {
     pub pfn: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub database_entry: Option<String>,
+    /// Raw bytes at the start of the `MMPFN` entry, reported without decoding any field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_bytes: Option<String>,
     /// False when the triage dump does not map the PFN database page.
     pub in_dump: bool,
 }
@@ -444,11 +447,12 @@ fn parse_kernel_dump(bytes: &Input) -> Result<DumpReport> {
 
     if let (Some(pfn), Some(triage)) = (pfn, triage.as_ref()) {
         let database_entry = triage.pfn_database_base.map(|base| triage::pfn_database_entry(base, pfn));
-        let in_dump = triage
-            .stack_block
-            .as_ref()
-            .is_some_and(|block| database_entry.is_some_and(|entry| entry >= block.va && entry < block.va + u64::from(block.size)));
-        report.physical_page = Some(PhysicalPage { pfn, database_entry: database_entry.map(hex64), in_dump });
+        let in_dump = database_entry.is_some_and(|entry| triage.blocks.iter().any(|block| block.contains(entry)));
+        let entry_bytes = database_entry
+            .filter(|_| in_dump)
+            .and_then(|entry| triage.read(bytes, entry, 0x20))
+            .map(|raw| raw.iter().map(|byte| format!("{byte:02X}")).collect::<String>());
+        report.physical_page = Some(PhysicalPage { pfn, database_entry: database_entry.map(hex64), entry_bytes, in_dump });
         if !in_dump {
             report.warnings.push(format!(
                 "PFN 0x{pfn:X} is a physical page number, and its database entry is outside the blocks this triage dump maps, so MMPFN contents are unavailable"
@@ -794,8 +798,11 @@ mod tests {
         const STACK: usize = 0x3100;
         const STACK_SIZE: usize = 0x200;
         const MODULE_COUNT: u32 = 9;
+        const PFN_PAGE: usize = STACK + STACK_SIZE;
+        const BLOCK_COUNT: u32 = 4;
+        const BLOCK_TABLE: usize = PFN_PAGE + BLOCK_COUNT as usize * 0x1000;
 
-        let mut bytes = vec![0u8; STACK + STACK_SIZE];
+        let mut bytes = vec![0u8; BLOCK_TABLE + BLOCK_COUNT as usize * 0x10];
         bytes[0..4].copy_from_slice(b"PAGE");
         bytes[4..8].copy_from_slice(b"DU64");
         bytes[8..12].copy_from_slice(&15u32.to_le_bytes());
@@ -840,6 +847,17 @@ mod tests {
         bytes[STACK..STACK + 8].copy_from_slice(&0xFFFF_8000_0000_2010u64.to_le_bytes());
         bytes[STACK + 8..STACK + 16].copy_from_slice(&0xFFFF_F800_0000_0000u64.to_le_bytes());
         bytes[STACK + 16..STACK + 24].copy_from_slice(&0xFFFF_8000_0000_2000u64.to_le_bytes());
+
+        // Captured block table: the first block holds the page the PFN database entry lives in.
+        bytes[0x2078..0x207C].copy_from_slice(&(BLOCK_TABLE as u32).to_le_bytes());
+        bytes[0x207C..0x2080].copy_from_slice(&BLOCK_COUNT.to_le_bytes());
+        for index in 0..BLOCK_COUNT as usize {
+            let record = BLOCK_TABLE + index * 0x10;
+            let va = if index == 0 { 0xFFFF_D580_296B_8000u64 } else { 0xFFFF_8000_0000_6000u64 + index as u64 * 0x1000 };
+            bytes[record..record + 8].copy_from_slice(&va.to_le_bytes());
+            bytes[record + 8..record + 0x0C].copy_from_slice(&((PFN_PAGE + index * 0x1000) as u32).to_le_bytes());
+            bytes[record + 0x0C..record + 0x10].copy_from_slice(&0x1000u32.to_le_bytes());
+        }
         bytes
     }
 
@@ -870,7 +888,8 @@ mod tests {
         let page = report.physical_page.expect("pfn parameter");
         assert_eq!(page.pfn, 0x00DC_E80D);
         assert_eq!(page.database_entry.as_deref(), Some("0xFFFFD580296B8270"));
-        assert!(!page.in_dump);
+        assert!(page.in_dump);
+        assert_eq!(page.entry_bytes.as_deref().map(str::len), Some(64));
         assert!(!report.warnings.iter().any(|warning| warning.starts_with("not_implemented")));
     }
 
