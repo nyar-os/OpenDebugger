@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 
 export type DumpFormat = 'minidump' | 'kernel-dump-64' | 'kernel-dump-32';
 
+export type DumpType = 'full' | 'summary' | 'header' | 'triage' | 'bitmap-full' | 'bitmap-kernel' | 'automatic' | 'unknown';
+
 export type SystemInfo = {
     architecture: string;
     osVersion: string;
@@ -40,11 +42,17 @@ export type BugcheckSummary = {
     summary?: string;
     commonCauses: string[];
     parameters: string[];
+    /** Labels for the four parameters in argument order. */
+    parameterLabels: string[];
+    /** Documented meaning of a parameter value, aligned with `parameters`. */
+    parameterNotes: (string | null)[];
 };
 
 export type DumpReport = {
     format: DumpFormat;
+    dumpType?: DumpType | null;
     sizeBytes: number;
+    capturedAt?: string | null;
     system?: SystemInfo;
     bugcheck?: BugcheckSummary;
     exception?: ExceptionInfo;
@@ -61,6 +69,7 @@ export type BugcheckInfo = {
     name?: string;
     summary?: string;
     commonCauses: string[];
+    parameterLabels: string[];
 };
 
 export type CapabilityCode = 'unsupported_platform' | 'not_implemented' | 'dependency_blocked';

@@ -25,6 +25,7 @@ export type {
     CapabilityEntry,
     DumpFormat,
     DumpReport,
+    DumpType,
     ExceptionInfo,
     ModuleInfo,
     OpenGuiOptions,

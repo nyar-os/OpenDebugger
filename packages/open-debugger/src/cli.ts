@@ -69,9 +69,21 @@ function formatBytes(bytes: number): string {
     return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 }
 
+/** Reports the honest capability gap recorded for a dump feature, if any. */
+function featureGap(report: DumpReport, feature: string): string | undefined {
+    return report.warnings.find((warning) => warning.startsWith(`not_implemented: ${feature}:`));
+}
+
+function describeParameter(value: string, label: string | undefined, note: string | null | undefined): string {
+    const detail = note ?? label;
+    return detail ? `${value} (${detail})` : value;
+}
+
 function printDumpReport(report: DumpReport, limit: number): void {
     console.log(`format: ${report.format}`);
+    if (report.dumpType) console.log(`dump type: ${report.dumpType}`);
     console.log(`size: ${formatBytes(report.sizeBytes)}`);
+    if (report.capturedAt) console.log(`captured at: ${report.capturedAt}`);
     if (report.system) {
         console.log(
             `system: ${report.system.architecture} ${report.system.osVersion} build ${report.system.buildNumber}, ` +
@@ -82,17 +94,24 @@ function printDumpReport(report: DumpReport, limit: number): void {
         const name = report.bugcheck.name ?? 'unknown bugcheck';
         console.log(`bugcheck: ${report.bugcheck.codeHex} ${name}`);
         if (report.bugcheck.summary) console.log(`  ${report.bugcheck.summary}`);
-        if (report.bugcheck.parameters.length > 0) console.log(`  parameters: ${report.bugcheck.parameters.join(', ')}`);
+        if (report.bugcheck.parameters.length > 0) {
+            const labels = report.bugcheck.parameterLabels ?? [];
+            const notes = report.bugcheck.parameterNotes ?? [];
+            const described = report.bugcheck.parameters.map((value, index) =>
+                describeParameter(value, labels[index], notes[index]),
+            );
+            console.log(`  parameters: ${described.join(', ')}`);
+        }
     }
     if (report.exception) {
         console.log(`exception: ${report.exception.code} at ${report.exception.address} (thread ${report.exception.threadId})`);
     }
-    console.log(`modules: ${report.modules.length}`);
+    console.log(`modules: ${featureGap(report, 'module-list') ? 'not_implemented' : report.modules.length}`);
     for (const module of report.modules.slice(0, limit)) {
         console.log(`  ${module.baseAddress}  ${String(module.sizeBytes).padStart(9)}  ${module.name}`);
     }
     if (report.modules.length > limit) console.log(`  ... ${report.modules.length - limit} more (use --limit or --json)`);
-    console.log(`threads: ${report.threads.length}`);
+    console.log(`threads: ${featureGap(report, 'thread-list') ? 'not_implemented' : report.threads.length}`);
     for (const warning of report.warnings) console.log(`warning: ${warning}`);
 }
 
@@ -104,6 +123,9 @@ function printBugcheck(info: BugcheckInfo): void {
     console.log(`${info.codeHex} ${info.name}`);
     if (info.summary) console.log(info.summary);
     for (const cause of info.commonCauses) console.log(`- ${cause}`);
+    for (const [index, label] of (info.parameterLabels ?? []).entries()) {
+        console.log(`parameter ${index + 1}: ${label}`);
+    }
 }
 
 const limitOption = {
@@ -190,9 +212,9 @@ cli.command('report', 'cli.cmd.report')
             if (options.json === true) console.log(JSON.stringify(result.report, null, 2));
             else if (result.dryRun) {
                 console.log(`dry_run: would write ${result.bytes} bytes to ${result.path}`);
-                console.log(
-                    `summary: ${result.report.format}, ${result.report.modules.length} modules, ${result.report.threads.length} threads`,
-                );
+                const modules = featureGap(result.report, 'module-list') ? 'not_implemented' : `${result.report.modules.length} modules`;
+                const threads = featureGap(result.report, 'thread-list') ? 'not_implemented' : `${result.report.threads.length} threads`;
+                console.log(`summary: ${result.report.format}, ${modules}, ${threads}`);
             }
             else console.log(`wrote report to ${result.path} (${result.bytes} bytes)`);
             return EXIT_OK;
