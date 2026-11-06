@@ -22,7 +22,10 @@ const TRIAGE_OFFSET: u64 = 0x2000;
 const CONTEXT_OFFSET_FIELD: u64 = TRIAGE_OFFSET + 0x0C;
 const DESCRIPTOR_END: u64 = TRIAGE_OFFSET + 0x180;
 const CONTEXT_RSP: u64 = 0x98;
+const CONTEXT_RBP: u64 = 0xA0;
 const CONTEXT_RIP: u64 = 0xF8;
+const MAX_FRAME_POINTER_LINKS: usize = 64;
+const MAX_STACK_GUESSES: usize = 64;
 
 const KERNEL_BASE_MIN: u64 = 0xFFFF_8000_0000_0000;
 const PAGE_SIZE: u64 = 0x1000;
@@ -76,6 +79,8 @@ impl TriageBlock {
 
 pub(crate) struct Triage {
     pub context_rip: u64,
+    pub context_rsp: u64,
+    pub context_rbp: Option<u64>,
     pub pfn_database_base: Option<u64>,
     pub stack_block: Option<StackBlock>,
     pub modules: Vec<KernelModule>,
@@ -103,6 +108,7 @@ pub(crate) fn parse(input: &Input) -> Option<Triage> {
         return None;
     }
     let context_rsp = read_u64(input, context_offset + CONTEXT_RSP)?;
+    let context_rbp = read_u64(input, context_offset + CONTEXT_RBP).filter(|value| *value >= KERNEL_BASE_MIN);
     let context_rip = read_u64(input, context_offset + CONTEXT_RIP)?;
     if context_rsp < KERNEL_BASE_MIN || context_rip < KERNEL_BASE_MIN {
         return None;
@@ -119,7 +125,7 @@ pub(crate) fn parse(input: &Input) -> Option<Triage> {
     }
     let pfn_database_base = read_u64(input, 0x18).filter(|value| *value >= KERNEL_BASE_MIN);
 
-    Some(Triage { context_rip, pfn_database_base, stack_block, modules, blocks, warnings })
+    Some(Triage { context_rip, context_rsp, context_rbp, pfn_database_base, stack_block, modules, blocks, warnings })
 }
 
 /// Finds the descriptor that expands into the table of captured virtual ranges.
@@ -254,98 +260,212 @@ fn read_module_name(input: &Input, offset: u64) -> Option<String> {
 /// Builds `MODULE+offset` frames from the faulting context and the crash stack block.
 ///
 /// Return addresses are verified against the matching module image when one is available on
-/// disk: the bytes immediately before the address must encode a call. A triage dump carries no
-/// unwind metadata, so frames are not produced by a real stack unwind; unverified stack words
-/// inside a module range are kept and marked as scanned rather than dropped silently.
+/// disk: the bytes immediately before the address must encode a call. When the crashing thread
+/// kept a frame-pointer chain inside the captured stack block, that chain contributes additional
+/// frames. A triage dump carries no unwind metadata, so this is not a real stack unwind.
 ///
-/// The second value lists stack words that equal a loaded module's base address. Those are
+/// Trusted frames and guesses are returned in separate vectors. A guess is a stack word that
+/// resolves into a loaded module but cannot be verified, because the image is missing or the
+/// frame-pointer link itself cannot be checked. Guesses never appear in the trusted sequence.
+///
+/// The third value lists stack words that equal a loaded module's base address. Those are
 /// image references passed as arguments, which is evidence a driver was being handled, not proof
 /// that it caused the bugcheck.
-pub(crate) fn stack_frames(input: &Input, triage: &mut Triage) -> (Vec<StackFrame>, Vec<StackReference>) {
-    let mut frames = vec![describe_frame(triage.context_rip, &triage.modules, StackFrameSource::Context)];
-    let mut addresses = vec![triage.context_rip];
+pub(crate) fn stack_frames(input: &Input, triage: &mut Triage) -> (Vec<StackFrame>, Vec<StackFrame>, Vec<StackReference>) {
+    let mut trusted: Vec<(u64, u64, StackFrame)> =
+        vec![(triage.context_rsp, triage.context_rip, describe_frame(triage.context_rip, &triage.modules, StackFrameSource::Context))];
+    let mut guesses: Vec<(u64, u64, StackFrame)> = Vec::new();
     let mut references = Vec::new();
-    let Some(block) = &triage.stack_block
-    else {
-        resolve_symbols(&mut frames, &addresses, triage);
-        return (frames, references);
-    };
-    let block_offset = block.file_offset;
-    let block_size = block.size;
-    let Some(data) = input.read(block_offset, block_size)
-    else {
-        return (frames, references);
-    };
-
+    let stack = triage.stack_block.as_ref().map(|block| (block.va, block.file_offset, block.size));
+    let data = stack.and_then(|(_, offset, size)| input.read(offset, size));
     let mut images: Vec<Option<ModuleImage>> = Vec::new();
     images.resize_with(triage.modules.len(), || None);
     let mut skipped = 0u32;
     let mut unavailable = Vec::new();
+    let mut chained_slots: Vec<u64> = Vec::new();
+    let mut dropped_guesses = 0u32;
 
-    let words = data.len() / 8;
-    for index in 0..words {
-        let Some(chunk) = data.get(index * 8..index * 8 + 8)
-        else {
-            break;
-        };
-        let mut bytes = [0u8; 8];
-        bytes.copy_from_slice(chunk);
-        let address = u64::from_le_bytes(bytes);
-        let Some((module_index, offset)) = resolve_module(&triage.modules, address)
-        else {
-            continue;
-        };
-        if offset == 0 {
-            // A module base on the stack is an argument, not a call site.
-            let reference = StackReference { address: format!("0x{address:016X}"), module: triage.modules[module_index].name.clone() };
-            if !references.iter().any(|existing| existing.address == reference.address && existing.module == reference.module) {
-                references.push(reference);
-            }
-            continue;
-        }
-        if let Some(image) = module_image(&triage.modules[module_index], &mut images[module_index]) {
-            if !image.is_call_target(offset as u32) {
-                skipped += 1;
+    if let (Some((block_va, _, _)), Some(data), Some(rbp)) = (stack, data.as_deref(), triage.context_rbp) {
+        for (slot, address) in frame_pointer_slots(triage.context_rsp, rbp, block_va, data) {
+            let Some((verified, slot, stack_frame)) =
+                classify_stack_word(slot, address, &triage.modules, &mut images, &mut references, &mut unavailable, &mut skipped)
+            else {
+                chained_slots.push(slot);
                 continue;
+            };
+            if verified {
+                trusted.push((slot, address, StackFrame { source: StackFrameSource::FramePointer, ..stack_frame }));
+                chained_slots.push(slot);
             }
-            frames.push(frame(address, &triage.modules[module_index], offset, StackFrameSource::CallSite));
-            addresses.push(address);
-        }
-        else {
-            if !unavailable.contains(&module_index) {
-                unavailable.push(module_index);
+            else if guesses.len() < MAX_STACK_GUESSES {
+                guesses.push((slot, address, stack_frame));
+                chained_slots.push(slot);
             }
-            frames.push(frame(address, &triage.modules[module_index], offset, StackFrameSource::Scan));
-            addresses.push(address);
+            else {
+                dropped_guesses += 1;
+            }
         }
     }
+
+    if let (Some((block_va, _, _)), Some(data)) = (stack, data.as_deref()) {
+        let words = data.len() / 8;
+        for index in 0..words {
+            let Some(chunk) = data.get(index * 8..index * 8 + 8)
+            else {
+                break;
+            };
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(chunk);
+            let address = u64::from_le_bytes(bytes);
+            let slot = block_va + (index * 8) as u64;
+            if chained_slots.contains(&slot) {
+                continue;
+            }
+            let Some((verified, slot, stack_frame)) =
+                classify_stack_word(slot, address, &triage.modules, &mut images, &mut references, &mut unavailable, &mut skipped)
+            else {
+                continue;
+            };
+            if verified {
+                trusted.push((slot, address, stack_frame));
+            }
+            else if guesses.len() < MAX_STACK_GUESSES {
+                guesses.push((slot, address, stack_frame));
+            }
+            else {
+                dropped_guesses += 1;
+            }
+        }
+    }
+
+    trusted.sort_by_key(|(slot, _, _)| *slot);
+    guesses.sort_by_key(|(slot, _, _)| *slot);
+
+    let mut frames: Vec<StackFrame> = trusted.into_iter().map(|(_, _, frame)| frame).collect();
+    let separate_guesses: Vec<StackFrame> = guesses.into_iter().map(|(_, _, frame)| frame).collect();
+    let mut addresses: Vec<u64> = frames.iter().filter_map(frame_address).collect();
+    addresses.extend(separate_guesses.iter().filter_map(frame_address));
 
     if skipped > 0 {
         triage
             .warnings
             .push(format!("{skipped} stack words resolved inside loaded modules but are not call sites, so they were not reported as frames"));
     }
+    if let Some(rbp) = triage.context_rbp
+        && !chained_slots.is_empty()
+    {
+        let links = chained_slots.len();
+        triage.warnings.push(format!(
+            "the frame-pointer chain at 0x{rbp:016X} contributed {links} stack slots, each checked against the module image before it was reported"
+        ));
+    }
+    if dropped_guesses > 0 {
+        triage.warnings.push(format!("{dropped_guesses} unverified stack words were dropped after the {MAX_STACK_GUESSES}-guess report limit"));
+    }
     if !unavailable.is_empty() {
         let names = unavailable.iter().map(|index| triage.modules[*index].name.clone()).collect::<Vec<_>>();
         triage.warnings.push(format!(
-            "module images for {} are not available on disk with a matching timestamp, so their stack words are unverified",
+            "module images for {} are not available on disk with a matching timestamp, so their stack words are reported as guesses",
             names.join(", ")
         ));
     }
-    resolve_symbols(&mut frames, &addresses, triage);
-    (frames, references)
+    let (symbols, warnings) = crate::symbols::function_names(&triage.modules, &addresses);
+    triage.warnings.extend(warnings);
+    let trusted_count = frames.len();
+    for (index, frame) in frames.iter_mut().enumerate() {
+        apply_symbol(frame, symbols.get(index).and_then(|symbol| symbol.as_ref()));
+    }
+    let mut separate_guesses = separate_guesses;
+    for (offset, frame) in separate_guesses.iter_mut().enumerate() {
+        apply_symbol(frame, symbols.get(trusted_count + offset).and_then(|symbol| symbol.as_ref()));
+    }
+    (frames, separate_guesses, references)
 }
 
-/// Asks the symbol engine to name each frame and appends its warnings to the triage report.
-fn resolve_symbols(frames: &mut [StackFrame], addresses: &[u64], triage: &mut Triage) {
-    let (symbols, warnings) = crate::symbols::function_names(&triage.modules, addresses);
-    triage.warnings.extend(warnings);
-    for (frame, symbol) in frames.iter_mut().zip(symbols) {
-        if let Some(symbol) = symbol {
-            frame.function = Some(symbol.function);
-            frame.function_offset = Some(format!("0x{:X}", symbol.displacement));
+/// Resolves one stack word into a frame.
+///
+/// Returns `None` for non-module words and for module base references, which are recorded in
+/// `references` instead. The boolean is true when the word was verified as a call target.
+fn classify_stack_word(
+    slot: u64,
+    address: u64,
+    modules: &[KernelModule],
+    images: &mut [Option<ModuleImage>],
+    references: &mut Vec<StackReference>,
+    unavailable: &mut Vec<usize>,
+    skipped: &mut u32,
+) -> Option<(bool, u64, StackFrame)> {
+    let (module_index, offset) = resolve_module(modules, address)?;
+    if offset == 0 {
+        // A module base on the stack is an argument, not a call site.
+        let reference = StackReference { address: format!("0x{address:016X}"), module: modules[module_index].name.clone() };
+        if !references.iter().any(|existing| existing.address == reference.address && existing.module == reference.module) {
+            references.push(reference);
         }
+        return None;
     }
+    if let Some(image) = module_image(&modules[module_index], &mut images[module_index]) {
+        if !image.is_call_target(offset as u32) {
+            *skipped += 1;
+            return None;
+        }
+        return Some((true, slot, frame(address, &modules[module_index], offset, StackFrameSource::CallSite)));
+    }
+    if !unavailable.contains(&module_index) {
+        unavailable.push(module_index);
+    }
+    Some((false, slot, frame(address, &modules[module_index], offset, StackFrameSource::Scan)))
+}
+
+fn apply_symbol(frame: &mut StackFrame, symbol: Option<&crate::symbols::ResolvedSymbol>) {
+    if let Some(symbol) = symbol {
+        frame.function = Some(symbol.function.clone());
+        frame.function_offset = Some(format!("0x{:X}", symbol.displacement));
+    }
+}
+
+fn frame_address(frame: &StackFrame) -> Option<u64> {
+    frame.address.strip_prefix("0x").and_then(|value| u64::from_str_radix(value, 16).ok())
+}
+
+/// Walks a frame-pointer chain inside the captured stack block.
+///
+/// A link is accepted only when the saved frame pointer grows monotonically, stays inside the
+/// captured block, and the return slot holds a kernel address. The returned slots are
+/// `(stack address of the return slot, return address)` pairs, which callers still have to
+/// verify against the module image.
+fn frame_pointer_slots(rsp: u64, rbp: u64, block_va: u64, data: &[u8]) -> Vec<(u64, u64)> {
+    let mut slots = Vec::new();
+    if rbp < rsp || rbp < block_va {
+        return slots;
+    }
+    let end = block_va.saturating_add(data.len() as u64);
+    let mut link = rbp;
+    for _ in 0..MAX_FRAME_POINTER_LINKS {
+        let Some(offset) = link.checked_sub(block_va).map(|value| value as usize)
+        else {
+            break;
+        };
+        let Some(window) = data.get(offset..offset.saturating_add(16))
+        else {
+            break;
+        };
+        let mut next_bytes = [0u8; 8];
+        next_bytes.copy_from_slice(&window[0..8]);
+        let mut return_bytes = [0u8; 8];
+        return_bytes.copy_from_slice(&window[8..16]);
+        let next = u64::from_le_bytes(next_bytes);
+        let return_address = u64::from_le_bytes(return_bytes);
+        if return_address < KERNEL_BASE_MIN {
+            break;
+        }
+        slots.push((link + 8, return_address));
+        if next <= link || next >= end || next < link + 16 {
+            break;
+        }
+        link = next;
+    }
+    slots
 }
 
 fn describe_frame(address: u64, modules: &[KernelModule], source: StackFrameSource) -> StackFrame {
@@ -477,4 +597,26 @@ pub(crate) fn image_path(name: &str) -> Option<PathBuf> {
 /// The PFN database entry for `pfn` is `PfnDataBase + pfn * sizeof(MMPFN)`; `MMPFN` is 0x30 bytes on x64.
 pub(crate) fn pfn_database_entry(base: u64, pfn: u64) -> u64 {
     base + pfn * 0x30
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KERNEL: u64 = 0xFFFF_8000_0000_0000;
+    const BLOCK: u64 = 0xFFFF_9000_0000_0000;
+
+    #[test]
+    fn frame_pointer_chain_follows_monotonic_links_only() {
+        let mut data = vec![0u8; 0x100];
+        let links = [(0x10, 0x20, KERNEL + 0x10), (0x20, 0x30, KERNEL + 0x20), (0x30, 0x00, KERNEL + 0x30)];
+        for (offset, next, return_address) in links {
+            data[offset..offset + 8].copy_from_slice(&(BLOCK + next as u64).to_le_bytes());
+            data[offset + 8..offset + 16].copy_from_slice(&return_address.to_le_bytes());
+        }
+        let slots = frame_pointer_slots(BLOCK, BLOCK + 0x10, BLOCK, &data);
+        assert_eq!(slots, vec![(BLOCK + 0x18, KERNEL + 0x10), (BLOCK + 0x28, KERNEL + 0x20), (BLOCK + 0x38, KERNEL + 0x30)]);
+        assert!(frame_pointer_slots(BLOCK, BLOCK - 0x8, BLOCK, &data).is_empty(), "a frame pointer below the stack pointer is rejected");
+        assert!(frame_pointer_slots(BLOCK, BLOCK + 0x200, BLOCK, &data).is_empty(), "a frame pointer outside the captured block is rejected");
+    }
 }

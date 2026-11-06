@@ -71,7 +71,7 @@ pub fn capabilities() -> Capabilities {
     let windows_only = if windows { CapabilityState::NotImplemented } else { CapabilityState::UnsupportedPlatform };
     let windows_only_detail = if windows { "not implemented yet on Windows" } else { "this capability is implemented for Windows only" };
     let kernel_module_detail = if windows {
-        "loaded module names, bases and sizes are read from the triage module table, and frames resolve to `MODULE+offset` only"
+        "loaded module names, bases and sizes are read from the triage module table, frames resolve to `MODULE+offset`, and function names are added when the local symbol store holds a matching image and PDB"
     }
     else {
         "kernel module enumeration is implemented for Windows only"
@@ -83,7 +83,7 @@ pub fn capabilities() -> Capabilities {
         "the Windows debug engine is available on Windows only"
     };
     let stack_detail = if windows {
-        "a triage dump carries no unwind metadata, so frames come from the faulting context plus verified call sites in the crash stack block rather than a real unwind"
+        "a triage dump carries no unwind metadata, so trusted frames come from the faulting context, verified call sites and a strictly validated frame-pointer chain, and unverified stack words are reported separately as guesses"
     }
     else {
         "the Windows debug engine is available on Windows only"

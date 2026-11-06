@@ -25,10 +25,12 @@ asks why the machine bugchecked.
   directory, holds the module image and PDB for the recorded timestamp and
   size. Frames then carry `function` and `functionOffset`. `stack-unwind` and
   `live-attach` still report `not_implemented`.
-- A kernel triage dump reports frames as `MODULE+offset` with a `source` of
-  `context`, `call-site` or `scan`. Treat a `scan` frame as unverified and do
-  not name it as the cause. A frame without `function` is not a missing report
-  field to invent: its module image or PDB is absent from the local store.
+- A kernel triage dump reports trusted frames as `MODULE+offset` with a `source`
+  of `context`, `call-site` or `frame-pointer`. Stack words that cannot be
+  verified appear in a separate `stackGuesses` list: treat them as unverified
+  candidates and never name them as the cause. A frame without `function` is
+  not a missing report field to invent: its module image or PDB is absent from
+  the local store.
 - `stackModuleBases` lists image references that appear as words on the crash
   stack. They show what was being handled, not what failed.
 - A minidump normally has no `bugcheck` field. Kernel dumps carry the code and

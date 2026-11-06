@@ -73,12 +73,14 @@ OpenDebugger is Windows-bound by design. The package does not emulate dump parsi
 symbol handling or a GUI on other platforms, and no portable fallback is provided. Live
 attach is not implemented yet on any platform.
 
-Kernel triage dumps resolve loaded modules and stack frames to `MODULE+offset`. Frames
-carry a `source` of `context`, `call-site` or `scan` because a triage dump has no unwind
-metadata. Function names are added from `dbghelp` when a local symbol store, set through
-`OPEN_DEBUGGER_SYMBOL_STORE` or the Windows Kits debugger `sym` directory, holds the module
-image and PDB for the recorded timestamp and size. Uncached modules keep the offset form
-and the report names the missing module.
+Kernel triage dumps resolve loaded modules and stack frames to `MODULE+offset`. Trusted
+frames carry a `source` of `context`, `call-site` or `frame-pointer`; a triage dump has no
+unwind metadata, so the frame-pointer link is validated against the module image before it
+is trusted. Stack words that cannot be verified are returned in `stackGuesses` instead of the
+trusted `stack` list. Function names are added from `dbghelp` when a local symbol store, set
+through `OPEN_DEBUGGER_SYMBOL_STORE` or the Windows Kits debugger `sym` directory, holds the
+module image and PDB for the recorded timestamp and size. Uncached modules keep the offset
+form and the report names the missing module.
 
 ## Agent skills
 

@@ -97,6 +97,8 @@ pub enum StackFrameSource {
     Context,
     /// A stack word that resolves into a module and whose preceding bytes encode a call.
     CallSite,
+    /// A return address reached through a strictly validated frame-pointer chain.
+    FramePointer,
     /// A stack word inside a module range that could not be checked against the module image.
     Scan,
 }
@@ -183,6 +185,8 @@ pub struct DumpReport {
     pub threads: Vec<ThreadInfo>,
     /// Frames recovered from the faulting context and crash stack; kernel triage dumps only.
     pub stack: Vec<StackFrame>,
+    /// Stack words that resolve into modules but cannot be verified. Never mixed into `stack`.
+    pub stack_guesses: Vec<StackFrame>,
     /// Module bases observed as words on the crash stack, deduplicated by module and address.
     pub stack_module_bases: Vec<StackReference>,
     /// Page frame number carried by a bugcheck parameter, with its PFN database entry.
@@ -204,6 +208,7 @@ impl DumpReport {
             modules: Vec::new(),
             threads: Vec::new(),
             stack: Vec::new(),
+            stack_guesses: Vec::new(),
             stack_module_bases: Vec::new(),
             physical_page: None,
             process_id: None,
@@ -442,8 +447,9 @@ fn parse_kernel_dump(bytes: &Input) -> Result<DumpReport> {
         if report.modules.is_empty() {
             report.warnings.push("the triage dump did not expose a loadable module table".to_string());
         }
-        let (stack, references) = triage::stack_frames(bytes, triage);
+        let (stack, stack_guesses, references) = triage::stack_frames(bytes, triage);
         report.stack = stack;
+        report.stack_guesses = stack_guesses;
         report.stack_module_bases = references;
         report.warnings.append(&mut triage.warnings);
     }
@@ -878,10 +884,13 @@ mod tests {
         assert_eq!(context.module.as_deref(), Some("fake-0.sys"));
         assert_eq!(context.offset_in_module.as_deref(), Some("0x0"));
 
-        let scanned = report.stack.get(1).expect("scanned frame");
+        assert_eq!(report.stack.len(), 1, "only the faulting context is a trusted frame without module images");
+
+        let scanned = report.stack_guesses.first().expect("scanned guess");
         assert_eq!(scanned.source, StackFrameSource::Scan);
         assert_eq!(scanned.module.as_deref(), Some("fake-1.sys"));
         assert_eq!(scanned.offset_in_module.as_deref(), Some("0x10"));
+        assert!(report.stack.iter().all(|frame| frame.source != StackFrameSource::Scan), "guesses must not be mixed into the trusted stack");
 
         let reference = report.stack_module_bases.first().expect("module base on the stack");
         assert_eq!(reference.address, "0xFFFF800000002000");

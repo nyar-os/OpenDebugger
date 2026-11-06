@@ -26,7 +26,7 @@ export type ThreadInfo = {
     threadId: number;
 };
 
-export type StackFrameSource = 'context' | 'call-site' | 'scan';
+export type StackFrameSource = 'context' | 'call-site' | 'frame-pointer' | 'scan';
 
 /** One frame recovered from a kernel triage dump, resolved to a `MODULE+offset` pair. */
 export type StackFrame = {
@@ -89,6 +89,8 @@ export type DumpReport = {
     threads: ThreadInfo[];
     /** Frames from the faulting context and crash stack, kernel triage dumps only. */
     stack: StackFrame[];
+    /** Stack words that resolve into modules but cannot be verified. Never mixed into `stack`. */
+    stackGuesses: StackFrame[];
     /** Module bases observed on the crash stack, deduplicated. */
     stackModuleBases: StackReference[];
     physicalPage?: PhysicalPage | null;

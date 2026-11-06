@@ -124,6 +124,18 @@ function printDumpReport(report: DumpReport, limit: number): void {
         }
         if (report.stack.length > limit) console.log(`  ... ${report.stack.length - limit} more (use --limit or --json)`);
     }
+    if (report.stackGuesses.length > 0) {
+        console.log(`unverified stack candidates: ${report.stackGuesses.length} (not counted as frames)`);
+        for (const frame of report.stackGuesses.slice(0, limit)) {
+            const offset = frame.offsetInModule ? `+${frame.offsetInModule}` : '';
+            const name = frame.function ? `${frame.function}${frame.functionOffset ? `+${frame.functionOffset}` : ''}` : undefined;
+            const place = frame.module
+                ? `${frame.module}${offset}${name ? `  ${name}` : ''}`
+                : 'unresolved';
+            console.log(`  ~ ${frame.address}  ${place}  (guess)`);
+        }
+        if (report.stackGuesses.length > limit) console.log(`  ... ${report.stackGuesses.length - limit} more (use --limit or --json)`);
+    }
     if (report.stackModuleBases.length > 0) {
         const references = report.stackModuleBases.map((entry) => `${entry.module} @ ${entry.address}`);
         console.log(`module bases on the stack: ${references.join(', ')}`);

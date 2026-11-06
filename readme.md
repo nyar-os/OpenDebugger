@@ -64,9 +64,13 @@ capabilities on macOS, Linux or Arm hosts, and there is no portable dump or symb
 implementation behind a compatibility facade.
 
 Kernel triage dumps are read without page tables: the descriptor area yields the loaded
-module table, the crash stack block and the faulting context, and stack frames are reported
-as `MODULE+offset` with their source marked as `context`, `call-site` or `scan`. A triage
-dump carries no unwind metadata, so frames are not a metadata-driven unwind.
+module table, the crash stack block and the faulting context. Trusted frames are separated
+from guesses: trusted frames come from the faulting context, from stack words verified
+against the module image as call sites, and from a strictly validated frame-pointer chain,
+and carry a `source` of `context`, `call-site` or `frame-pointer`. Stack words that resolve
+into a module but cannot be verified are reported in a separate `stackGuesses` list and never
+appear in the trusted sequence. A triage dump carries no unwind metadata, so this is not a
+metadata-driven unwind.
 
 Function names come from `dbghelp.dll`, bound at runtime through the same export names a
 debugger uses, from a local symbol store. The store is `OPEN_DEBUGGER_SYMBOL_STORE` when
