@@ -112,6 +112,26 @@ function printDumpReport(report: DumpReport, limit: number): void {
     }
     if (report.modules.length > limit) console.log(`  ... ${report.modules.length - limit} more (use --limit or --json)`);
     console.log(`threads: ${featureGap(report, 'thread-list') ? 'not_implemented' : report.threads.length}`);
+    if (report.stack.length > 0) {
+        console.log(`stack: ${report.stack.length} frames`);
+        for (const frame of report.stack.slice(0, limit)) {
+            const place = frame.module
+                ? `${frame.module}${frame.offsetInModule ? `+${frame.offsetInModule}` : ''}`
+                : 'unresolved';
+            console.log(`  ${frame.address}  ${place}  (${frame.source})`);
+        }
+        if (report.stack.length > limit) console.log(`  ... ${report.stack.length - limit} more (use --limit or --json)`);
+    }
+    if (report.stackModuleBases.length > 0) {
+        const references = report.stackModuleBases.map((entry) => `${entry.module} @ ${entry.address}`);
+        console.log(`module bases on the stack: ${references.join(', ')}`);
+    }
+    if (report.physicalPage) {
+        const page = report.physicalPage;
+        const entry = page.databaseEntry ?? 'unknown entry';
+        const mapped = page.inDump ? 'mapped by this dump' : 'not mapped by this dump';
+        console.log(`physical page: PFN 0x${page.pfn.toString(16).toUpperCase()} at ${entry} (${mapped})`);
+    }
     for (const warning of report.warnings) console.log(`warning: ${warning}`);
 }
 

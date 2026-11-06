@@ -26,6 +26,30 @@ export type ThreadInfo = {
     threadId: number;
 };
 
+export type StackFrameSource = 'context' | 'call-site' | 'scan';
+
+/** One frame recovered from a kernel triage dump, resolved to a `MODULE+offset` pair. */
+export type StackFrame = {
+    address: string;
+    module?: string;
+    offsetInModule?: string;
+    source: StackFrameSource;
+};
+
+/** A loaded module whose base address appears as a word on the crash stack. */
+export type StackReference = {
+    address: string;
+    module: string;
+};
+
+/** A bugcheck page frame number and its `MMPFN` database entry. */
+export type PhysicalPage = {
+    pfn: number;
+    databaseEntry?: string;
+    /** False when the triage dump does not map the PFN database page. */
+    inDump: boolean;
+};
+
 export type ExceptionInfo = {
     threadId: number;
     code: string;
@@ -58,6 +82,11 @@ export type DumpReport = {
     exception?: ExceptionInfo;
     modules: ModuleInfo[];
     threads: ThreadInfo[];
+    /** Frames from the faulting context and crash stack, kernel triage dumps only. */
+    stack: StackFrame[];
+    /** Module bases observed on the crash stack, deduplicated. */
+    stackModuleBases: StackReference[];
+    physicalPage?: PhysicalPage | null;
     processId?: number;
     warnings: string[];
 };
