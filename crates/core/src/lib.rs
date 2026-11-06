@@ -6,6 +6,7 @@
 //! none, so frames come from the faulting context and verified call sites.
 
 pub mod bugcheck;
+pub mod correlation;
 pub mod error;
 mod input;
 pub mod minidump;
@@ -15,6 +16,7 @@ mod symbols;
 mod triage;
 
 pub use bugcheck::{BugcheckInfo, lookup_bugcheck, parse_code};
+pub use correlation::{CrashGroup, CrashObservation, CrashOccurrence, aggregate, observe};
 pub use error::{CapabilityState, Error, Result};
 pub use minidump::{
     BugcheckSummary, DumpFormat, DumpReport, ExceptionInfo, ModuleInfo, PhysicalPage, StackFrame, StackFrameSource, StackReference, SystemInfo,

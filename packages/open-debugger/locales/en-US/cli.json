@@ -3,6 +3,7 @@
         "intro": "OpenDebugger — analyze Windows crash dumps, resolve bugcheck codes, and export reports.",
         "cmd": {
             "analyze": "Parse a Windows minidump or kernel dump and print its summary",
+            "correlate": "Group several dumps from one machine by bugcheck and trigger module",
             "bugcheck": "Resolve a bugcheck code against the built-in table",
             "capabilities": "Print platform capabilities as JSON",
             "report": "Write the parsed dump report to a file",

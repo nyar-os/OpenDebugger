@@ -11,8 +11,8 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createCli, type ParsedOptions } from '@wae/commander';
-import { analyzeDump, auditQuery, capabilities, configureAudit, lookupBugcheck, runGui, version, writeReport } from './index.js';
-import type { ActorKind, BugcheckInfo, DumpReport } from './index.js';
+import { analyzeDump, auditQuery, capabilities, configureAudit, correlateDumps, lookupBugcheck, runGui, version, writeReport } from './index.js';
+import type { ActorKind, BugcheckInfo, CrashGroup, DumpReport } from './index.js';
 
 const EXIT_OK = 0;
 const EXIT_FAILURE = 1;
@@ -174,6 +174,21 @@ function printBugcheck(info: BugcheckInfo): void {
     }
 }
 
+function printCrashGroups(groups: CrashGroup[]): void {
+    if (groups.length === 0) {
+        console.log('no dumps grouped');
+        return;
+    }
+    for (const group of groups) {
+        const code = group.bugcheckHex ? `${group.bugcheckHex}${group.bugcheckName ? ` ${group.bugcheckName}` : ''}` : 'no bugcheck';
+        const module = group.module ?? 'no trigger module';
+        console.log(`${code}  ${module}  ${group.count} ${group.count === 1 ? 'crash' : 'crashes'}`);
+        for (const dump of group.dumps) console.log(`  ${dump.capturedAt ?? 'unknown time'}  ${dump.path}`);
+        const others = group.modules.filter((entry) => entry !== group.module);
+        if (others.length > 0) console.log(`  also on the stack: ${others.join(', ')}`);
+    }
+}
+
 const limitOption = {
     coerce: (raw: string | boolean | string[]): unknown => {
         const n = Number(raw);
@@ -198,6 +213,25 @@ cli.command('analyze', 'cli.cmd.analyze')
             const report = analyzeDump({ path: dump });
             if (options.json === true) console.log(JSON.stringify(report, null, 2));
             else printDumpReport(report, limit);
+            return EXIT_OK;
+        }
+        catch (error) {
+            return reportError(error);
+        }
+    });
+
+cli.command('correlate', 'cli.cmd.correlate')
+    .option('--json', 'cli.opt.json')
+    .actionCtx(async (options, args) => {
+        applyActor(options);
+        if (args.length === 0) {
+            console.error('usage: open-debugger correlate <dump>... [--json]');
+            return EXIT_USAGE;
+        }
+        try {
+            const groups = correlateDumps(args);
+            if (options.json === true) console.log(JSON.stringify(groups, null, 2));
+            else printCrashGroups(groups);
             return EXIT_OK;
         }
         catch (error) {

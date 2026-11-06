@@ -16,6 +16,7 @@ A native addon is required. The published addon targets Windows x64
 
 ```bash
 open-debugger analyze <dump> [--json] [--limit <n>]
+open-debugger correlate <dump>... [--json]
 open-debugger bugcheck <code> [--json]
 open-debugger capabilities
 open-debugger report <dump> --out <path> [--dry-run] [--json]
@@ -25,6 +26,9 @@ open-debugger version
 ```
 
 - `analyze` prints a dump summary. `--limit` caps the module rows that are printed.
+- `correlate` groups several dumps from one machine by bugcheck code and by the first module
+  outside the kernel and HAL that owns a trusted frame or appears as a stack base. Groups are
+  ordered by dump count.
 - `bugcheck` accepts decimal or hexadecimal codes such as `0x000000EF`.
 - `capabilities` prints the state of every capability for the current host as JSON.
 - `report` writes `open-debugger.report/v0` JSON. `--dry-run` encodes the document and

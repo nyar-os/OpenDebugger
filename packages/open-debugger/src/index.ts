@@ -6,6 +6,7 @@ import {
     type AuditRecord,
     type BugcheckInfo,
     type Capabilities,
+    type CrashGroup,
     type DumpReport,
     type OpenGuiOptions,
     type ReportWrite,
@@ -23,6 +24,9 @@ export type {
     Capabilities,
     CapabilityCode,
     CapabilityEntry,
+    CrashGroup,
+    CrashObservation,
+    CrashOccurrence,
     DumpFormat,
     DumpReport,
     DumpType,
@@ -50,6 +54,14 @@ export function analyzeDump(options: { path: string }): DumpReport {
 /** Resolve a bugcheck code against the built-in table. Unknown codes return `known: false`. */
 export function lookupBugcheck(options: { code: number | string }): BugcheckInfo {
     return loadNative().lookupBugcheck(options);
+}
+
+/**
+ * Group dumps from one machine by bugcheck code and by the first module outside the kernel
+ * and HAL that owns a trusted frame or appears as a stack base.
+ */
+export function correlateDumps(paths: string[]): CrashGroup[] {
+    return loadNative().correlateDumps(...paths);
 }
 
 /**

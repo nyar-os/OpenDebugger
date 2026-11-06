@@ -3,6 +3,7 @@
         "intro": "OpenDebugger — 分析 Windows 崩溃转储、解析 bugcheck 代码并导出报告。",
         "cmd": {
             "analyze": "解析 Windows minidump 或内核转储并打印摘要",
+            "correlate": "按 bugcheck 与触发模块归并同一台机器的多个转储",
             "bugcheck": "在内置表中解析 bugcheck 代码",
             "capabilities": "以 JSON 打印当前平台能力",
             "report": "把解析报告写入文件",

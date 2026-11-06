@@ -199,7 +199,7 @@ pub struct DumpReport {
 }
 
 impl DumpReport {
-    fn new(format: DumpFormat, size_bytes: u64) -> Self {
+    pub(crate) fn new(format: DumpFormat, size_bytes: u64) -> Self {
         Self {
             format,
             dump_type: None,

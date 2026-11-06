@@ -16,7 +16,8 @@ use std::{
 };
 
 use open_debugger_core::{
-    BugcheckInfo, CapabilityState, DumpReport, Error as CoreError, analyze_file, capabilities, lookup_bugcheck, parse_code, write_report,
+    BugcheckInfo, CapabilityState, DumpReport, Error as CoreError, aggregate, analyze_file, capabilities, lookup_bugcheck, observe, parse_code,
+    write_report,
 };
 use serde_json::{Value, json};
 use wae::{
@@ -316,6 +317,33 @@ fn lookup_bugcheck_js(ctx: CallContext) -> Result<JsValue> {
     value_to_js(ctx.env(), &info)
 }
 
+#[function(js_name = "correlateDumps")]
+fn correlate_dumps_js(ctx: CallContext) -> Result<JsValue> {
+    let mut paths = Vec::new();
+    for argument in ctx.args() {
+        if argument.type_of()? != sys::napi_string {
+            return Err(Error::new("correlateDumps expects dump paths as string arguments"));
+        }
+        paths.push(argument.as_string()?);
+    }
+    if paths.is_empty() {
+        return Err(Error::new("correlateDumps expects at least one dump path"));
+    }
+    let params = json!({ "paths": paths });
+    let groups = audit::run("correlate-dumps", Mode::DryRun, params, || {
+        let mut observations = Vec::new();
+        for path in &paths {
+            let report = analyze_file(Path::new(path))?;
+            observations.push(observe(path, &report));
+        }
+        let groups = aggregate(&observations);
+        let summary = format!("{} dumps, {} groups", observations.len(), groups.len());
+        Ok((groups, audit::Summary::new(observations.len() as u64, summary)))
+    })
+    .map_err(core_error)?;
+    value_to_js(ctx.env(), &groups)
+}
+
 #[function(js_name = "writeReport")]
 fn write_report_js(ctx: CallContext) -> Result<JsValue> {
     let arg = ctx.args().first().copied();
@@ -510,6 +538,7 @@ fn optional_number_prop(value: JsValue, name: &str) -> Result<Option<u64>> {
 register_module![
     analyze_dump,
     lookup_bugcheck_js,
+    correlate_dumps_js,
     write_report_js,
     version,
     capabilities_js,

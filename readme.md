@@ -27,6 +27,7 @@ expected to run the tool.
 | Command | Purpose |
 |---|---|
 | `open-debugger analyze <dump>` | Print a dump summary as text or `--json` |
+| `open-debugger correlate <dump>...` | Group dumps by bugcheck and trigger module |
 | `open-debugger bugcheck <code>` | Resolve a bugcheck code |
 | `open-debugger capabilities` | List capability states for this build |
 | `open-debugger report <dump> --out <path>` | Write a JSON report (`--dry-run` previews) |

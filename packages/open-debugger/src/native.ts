@@ -228,9 +228,39 @@ export type AuditQueryOptions = {
     limit?: number;
 };
 
+/** What one dump contributes to cross-dump grouping. */
+export type CrashObservation = {
+    path: string;
+    capturedAt?: string;
+    bugcheck?: number;
+    bugcheckName?: string;
+    /** Modules outside the kernel and HAL that own a trusted frame or appear as a stack base. */
+    triggerModules: string[];
+};
+
+/** One dump inside a `CrashGroup`. */
+export type CrashOccurrence = {
+    path: string;
+    capturedAt?: string;
+};
+
+/** Crashes that share a bugcheck code and a trigger module. */
+export type CrashGroup = {
+    bugcheck?: number;
+    bugcheckHex?: string;
+    bugcheckName?: string;
+    /** Module the group is keyed by, absent when the dump names none. */
+    module?: string;
+    /** Every non-platform module seen across the grouped dumps. */
+    modules: string[];
+    count: number;
+    dumps: CrashOccurrence[];
+};
+
 type NativeBinding = {
     analyzeDump(options: { path: string }): DumpReport;
     lookupBugcheck(options: { code: number | string }): BugcheckInfo;
+    correlateDumps(...paths: string[]): CrashGroup[];
     writeReport(options: WriteReportOptions): ReportWrite;
     capabilities(): Capabilities;
     version(): string;

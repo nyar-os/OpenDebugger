@@ -14,6 +14,8 @@ asks why the machine bugchecked.
 2. Parse the dump without symbols: `open-debugger analyze <dump-path> --json`
 3. Resolve a code that is not in the dump: `open-debugger bugcheck <code> --json`
 4. Preview the durable report before writing it: `open-debugger report <dump-path> --out <report-path> --dry-run`
+5. When the user provides several dumps from one machine, group them first:
+   `open-debugger correlate <dump>... --json`
 
 ## Reading the result
 
@@ -36,6 +38,10 @@ asks why the machine bugchecked.
   `<GUID><age>` `pdbKey`, and a `fetchCommand`. Report those fields to the user
   and run the `symchk` command only after they agree to populate a local store
   with a symbol server.
+- `correlate` keys each group by the bugcheck code plus the first non-platform
+  module. Groups show co-occurrence, not causation: a module that merely appears
+  on the stack can put unrelated root causes in one group, so confirm against
+  the exception address and frame arguments before naming a driver.
 - `stackModuleBases` lists image references that appear as words on the crash
   stack. They show what was being handled, not what failed.
 - A minidump normally has no `bugcheck` field. Kernel dumps carry the code and
