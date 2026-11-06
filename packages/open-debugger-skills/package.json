@@ -1,6 +1,6 @@
 {
     "name": "@wae/open-debugger-skills",
-    "version": "0.0.0",
+    "version": "0.0.1",
     "description": "Agent skills for the OpenDebugger CLI",
     "license": "Apache-2.0",
     "files": [
@@ -16,5 +16,9 @@
     "engines": {
         "node": ">=18"
     },
-    "repository": "https://github.com/nyar-os/OpenDebugger"
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/nyar-os/OpenDebugger.git",
+        "directory": "packages/open-debugger-skills"
+    }
 }

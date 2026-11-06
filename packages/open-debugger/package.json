@@ -1,12 +1,12 @@
 {
     "name": "@wae/open-debugger",
-    "version": "0.0.0",
+    "version": "0.0.1",
     "description": "Windows crash dump analysis with bugcheck, module and report output",
     "type": "module",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
     "bin": {
-        "open-debugger": "./dist/cli.js"
+        "open-debugger": "dist/cli.js"
     },
     "files": [
         "dist",
@@ -34,7 +34,11 @@
         "node": ">=18"
     },
     "license": "Apache-2.0",
-    "repository": "https://github.com/nyar-os/OpenDebugger",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/nyar-os/OpenDebugger.git",
+        "directory": "packages/open-debugger"
+    },
     "devDependencies": {
         "@types/node": "^22.20.4",
         "typescript": "^5.9.2"

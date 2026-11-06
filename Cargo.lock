@@ -252,7 +252,7 @@ dependencies = [
 
 [[package]]
 name = "open-debugger-core"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -260,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "open-debugger-napi"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "open-debugger-core",
  "serde",
