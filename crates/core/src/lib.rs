@@ -11,6 +11,7 @@ pub mod error;
 mod input;
 pub mod minidump;
 pub mod pdb;
+pub mod pe;
 pub mod platform;
 pub mod report;
 mod symbols;

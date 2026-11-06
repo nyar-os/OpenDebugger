@@ -17,14 +17,20 @@ use serde::Serialize;
 
 mod dbi;
 mod info;
+mod lookup;
 mod msf;
+mod publics;
 
+#[cfg(test)]
+mod conformance;
 #[cfg(test)]
 mod fixtures;
 
 pub use dbi::DbiHeader;
 pub use info::PdbInfo;
+pub use lookup::{FunctionEntry, FunctionHit, FunctionIndex};
 pub use msf::Msf;
+pub use publics::{PublicSymbol, PublicSymbolTable, PublicsHeader};
 
 /// Stream numbers fixed by the MSF 7.00 layout.
 const OLD_DIRECTORY_STREAM: u32 = 0;
@@ -213,6 +219,13 @@ impl PdbFile {
             .collect()
     }
 
+    /// Validates the public symbol stream and collects every `S_PUB32` record it indexes.
+    pub fn public_symbols(&mut self) -> Result<PublicSymbolTable, PdbError> {
+        let public_stream = self.read_stream(u32::from(self.dbi.public_stream))?;
+        let records = self.read_stream(u32::from(self.dbi.symbol_record_stream))?;
+        publics::load(&public_stream, &records)
+    }
+
     fn role(&self, index: u32, has_stream: bool, name: Option<&str>) -> StreamRole {
         if !has_stream {
             return StreamRole::Nil;
@@ -318,7 +331,7 @@ mod tests {
     #[ignore = "requires OPEN_DEBUGGER_REAL_PDB to point at a real Windows PDB"]
     fn lists_every_stream_of_a_real_kernel_pdb() {
         let path = std::env::var_os("OPEN_DEBUGGER_REAL_PDB").expect("set OPEN_DEBUGGER_REAL_PDB to a real PDB");
-        let mut pdb = PdbFile::open(Path::new(&path)).expect("open the real PDB");
+        let pdb = PdbFile::open(Path::new(&path)).expect("open the real PDB");
         println!(
             "container: {} blocks of {} bytes, {}-byte directory, {} streams",
             pdb.block_count(),
@@ -356,5 +369,26 @@ mod tests {
         let records = streams.iter().find(|entry| entry.role == StreamRole::SymbolRecords).expect("symbol record stream");
         assert!(public.size_bytes.unwrap_or(0) > 0, "the public symbol stream carries the hash table");
         assert!(records.size_bytes.unwrap_or(0) > public.size_bytes.unwrap_or(0), "symbol records outgrow the index");
+    }
+
+    /// Reports the public symbol table a real PDB yields, so the record walk can be checked against
+    /// real data.
+    #[test]
+    #[ignore = "requires OPEN_DEBUGGER_REAL_PDB to point at a real Windows PDB"]
+    fn walks_public_symbols_of_a_real_kernel_pdb() {
+        let path = std::env::var_os("OPEN_DEBUGGER_REAL_PDB").expect("set OPEN_DEBUGGER_REAL_PDB to a real PDB");
+        let mut pdb = PdbFile::open(Path::new(&path)).expect("open the real PDB");
+        let table = pdb.public_symbols().expect("the DBI header names a parsable public symbol stream");
+        println!("publics header: {:?}", table.header);
+        println!("{} public symbols", table.symbols.len());
+        for symbol in table.symbols.iter().take(8) {
+            println!("  section {:>3} offset 0x{:08X} flags 0x{:08X} {}", symbol.section, symbol.offset, symbol.flags, symbol.name);
+        }
+
+        assert!(table.symbols.len() > 40_000, "a kernel PDB carries tens of thousands of publics, got {}", table.symbols.len());
+        assert!(
+            table.symbols.iter().all(|symbol| symbol.section != 0 && !symbol.name.is_empty()),
+            "every public record names a section and a symbol"
+        );
     }
 }
