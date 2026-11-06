@@ -3,7 +3,7 @@ use std::{fs, path::Path};
 use serde::Serialize;
 
 use crate::{
-    bugcheck::lookup_bugcheck,
+    bugcheck::{lookup_bugcheck, parameter_labels, parameter_notes},
     error::{Error, Result},
 };
 
@@ -21,6 +21,35 @@ const STREAM_MISC_INFO: u32 = 15;
 const MAX_STREAMS: u32 = 256;
 const MAX_MODULES: u32 = 65_536;
 const MAX_STRING_BYTES: u32 = 32_768;
+
+/// Windows `DUMP_TYPE` values stored in the 64-bit kernel dump header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DumpType {
+    Full,
+    Summary,
+    Header,
+    Triage,
+    BitmapFull,
+    BitmapKernel,
+    Automatic,
+    Unknown,
+}
+
+impl DumpType {
+    fn from_header(value: u32) -> Self {
+        match value {
+            1 => Self::Full,
+            2 => Self::Summary,
+            3 => Self::Header,
+            4 => Self::Triage,
+            5 => Self::BitmapFull,
+            6 => Self::BitmapKernel,
+            7 => Self::Automatic,
+            _ => Self::Unknown,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -78,13 +107,19 @@ pub struct BugcheckSummary {
     pub summary: Option<&'static str>,
     pub common_causes: Vec<&'static str>,
     pub parameters: Vec<String>,
+    pub parameter_labels: Vec<&'static str>,
+    pub parameter_notes: Vec<Option<&'static str>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DumpReport {
     pub format: DumpFormat,
+    /// Header-declared dump kind; minidumps do not declare one.
+    pub dump_type: Option<DumpType>,
     pub size_bytes: u64,
+    /// ISO-8601 UTC time recorded when the dump was generated, when the header carries one.
+    pub captured_at: Option<String>,
     pub system: Option<SystemInfo>,
     pub bugcheck: Option<BugcheckSummary>,
     pub exception: Option<ExceptionInfo>,
@@ -98,7 +133,9 @@ impl DumpReport {
     fn new(format: DumpFormat, size_bytes: u64) -> Self {
         Self {
             format,
+            dump_type: None,
             size_bytes,
+            captured_at: None,
             system: None,
             bugcheck: None,
             exception: None,
@@ -134,6 +171,7 @@ fn parse_minidump(bytes: &[u8]) -> Result<DumpReport> {
     }
 
     let mut report = DumpReport::new(DumpFormat::MiniDump, bytes.len() as u64);
+    report.captured_at = read_u32(bytes, 20).filter(|value| *value > 0).and_then(|value| iso8601_from_unix_ms(i64::from(value) * 1000));
 
     for index in 0..stream_count {
         let entry_rva = directory_rva as usize + index as usize * 12;
@@ -182,8 +220,6 @@ fn parse_system_info(bytes: &[u8], rva: u32) -> Option<SystemInfo> {
     let architecture = read_u16(bytes, rva)?;
     let processor_count = read_u8(bytes, rva + 6)?;
     let product_type = read_u8(bytes, rva + 7)?;
-    let major = read_u32(bytes, rva + 8)?;
-    let minor = read_u32(bytes, rva + 12)?;
     let build = read_u32(bytes, rva + 16)?;
     let platform_id = read_u32(bytes, rva + 20)?;
     if platform_id != 2 {
@@ -191,7 +227,7 @@ fn parse_system_info(bytes: &[u8], rva: u32) -> Option<SystemInfo> {
     }
     Some(SystemInfo {
         architecture: architecture_name(architecture).to_string(),
-        os_version: format!("Windows {major}.{minor}"),
+        os_version: windows_release(build).to_string(),
         build_number: build,
         processor_count,
         product_type: product_type_name(product_type).to_string(),
@@ -260,17 +296,22 @@ fn parse_kernel_dump(bytes: &[u8]) -> Result<DumpReport> {
         }
     };
 
-    let major = read_u32(bytes, 8).ok_or_else(|| Error::message("truncated kernel dump header"))?;
-    let minor = read_u32(bytes, 12).ok_or_else(|| Error::message("truncated kernel dump header"))?;
+    let build = read_u32(bytes, 12).ok_or_else(|| Error::message("truncated kernel dump header"))?;
     let machine = read_u32(bytes, machine_offset).ok_or_else(|| Error::message("truncated kernel dump header"))?;
     let processors = read_u32(bytes, processor_offset).ok_or_else(|| Error::message("truncated kernel dump header"))?;
     let bugcheck_code = read_u32(bytes, bugcheck_offset).ok_or_else(|| Error::message("truncated kernel dump header"))?;
 
+    let is_64 = matches!(format, DumpFormat::KernelDump64);
     let mut report = DumpReport::new(format, bytes.len() as u64);
+    if is_64 {
+        // `DUMP_TYPE` and the capture time sit behind the memory descriptors of the 64-bit header.
+        report.dump_type = read_u32(bytes, 0xF98).map(DumpType::from_header);
+        report.captured_at = read_u64(bytes, 0xFA8).and_then(filetime_to_iso8601);
+    }
     report.system = Some(SystemInfo {
         architecture: machine_name(machine).to_string(),
-        os_version: format!("Windows {major}.{minor}"),
-        build_number: 0,
+        os_version: windows_release(build).to_string(),
+        build_number: build,
         processor_count: processors.min(255) as u8,
         product_type: "unknown".to_string(),
     });
@@ -279,16 +320,10 @@ fn parse_kernel_dump(bytes: &[u8]) -> Result<DumpReport> {
         report.warnings.push("kernel dump header contains no bugcheck code".to_string());
     }
     else {
-        let parameters = (0..4)
+        let values = (0..4)
             .map(|index| {
-                let offset = parameter_offset + index * if matches!(format, DumpFormat::KernelDump64) { 8 } else { 4 };
-                let value = if matches!(format, DumpFormat::KernelDump64) {
-                    read_u64(bytes, offset).unwrap_or_default()
-                }
-                else {
-                    read_u32(bytes, offset).unwrap_or_default() as u64
-                };
-                hex64(value)
+                let offset = parameter_offset + index * if is_64 { 8 } else { 4 };
+                if is_64 { read_u64(bytes, offset).unwrap_or_default() } else { read_u32(bytes, offset).unwrap_or_default() as u64 }
             })
             .collect::<Vec<_>>();
         let info = lookup_bugcheck(bugcheck_code);
@@ -299,15 +334,40 @@ fn parse_kernel_dump(bytes: &[u8]) -> Result<DumpReport> {
             name: info.name,
             summary: info.summary,
             common_causes: info.common_causes,
-            parameters,
+            parameter_labels: parameter_labels(bugcheck_code).to_vec(),
+            parameter_notes: parameter_notes(bugcheck_code, &values),
+            parameters: values.iter().map(|value| hex64(*value)).collect(),
         });
     }
 
     report.warnings.push(
-        "kernel dump header is parsed from the documented Windows layout; module list, symbol resolution and stack recovery are not available for this file"
+        "not_implemented: module-list: kernel triage dumps carry module names only inside mapped memory, and this parser does not translate virtual addresses, so module and `MODULE+offset` attribution is unavailable"
             .to_string(),
     );
+    report.warnings.push(
+        "not_implemented: thread-list: kernel triage dumps store only the faulting context, so per-thread enumeration is unavailable"
+            .to_string(),
+    );
+    report.warnings.push(
+        "not_implemented: stack-unwind: recovering a module+offset stack needs the Windows debug engine, which this build does not bind"
+            .to_string(),
+    );
+    report
+        .warnings
+        .push("dependency_blocked: symbol-resolve: symbol names need the Windows debug engine and a configured symbol path".to_string());
     Ok(report)
+}
+
+/// Maps a Windows build number to its marketed release name.
+fn windows_release(build: u32) -> &'static str {
+    match build {
+        7600..=7601 => "Windows 7",
+        9200 => "Windows 8",
+        9600 => "Windows 8.1",
+        10_240..=21_999 => "Windows 10",
+        22_000..=u32::MAX => "Windows 11",
+        _ => "Windows",
+    }
 }
 
 fn architecture_name(value: u16) -> &'static str {
@@ -338,6 +398,45 @@ fn product_type_name(value: u8) -> &'static str {
         3 => "server",
         _ => "unknown",
     }
+}
+
+/// Converts a Windows `FILETIME` (100 ns ticks since 1601-01-01) to ISO-8601 UTC.
+fn filetime_to_iso8601(filetime: u64) -> Option<String> {
+    if filetime == 0 {
+        return None;
+    }
+    let unix_ms = i128::from(filetime) / 10_000 - 11_644_473_600_000;
+    iso8601_from_unix_ms(i64::try_from(unix_ms).ok()?)
+}
+
+fn iso8601_from_unix_ms(milliseconds: i64) -> Option<String> {
+    // Reject times outside 1970-01-01 .. 9999-12-31 so garbage headers do not print as a date.
+    if !(0..=253_402_300_799_999).contains(&milliseconds) {
+        return None;
+    }
+    let seconds = milliseconds / 1000;
+    let millis = milliseconds % 1000;
+    let days = seconds / 86_400;
+    let seconds_of_day = seconds % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3600;
+    let minute = (seconds_of_day % 3600) / 60;
+    let second = seconds_of_day % 60;
+    Some(format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z"))
+}
+
+/// Gregorian calendar conversion for days since 1970-01-01 (Howard Hinnant's civil algorithm).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let shifted = days + 719_468;
+    let era = if shifted >= 0 { shifted } else { shifted - 146_096 } / 146_097;
+    let day_of_era = (shifted - era * 146_097) as u32;
+    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = i64::from(year_of_era) + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_position = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_position + 2) / 5 + 1;
+    let month = if month_position < 10 { month_position + 3 } else { month_position - 9 };
+    (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
 fn read_utf16_string(bytes: &[u8], rva: u32) -> Option<String> {
@@ -523,6 +622,7 @@ mod tests {
             data_base + system_size + module_list_size + module_name_size + thread_list_size + exception_size + misc_size
         );
         fixture.put_u32(0, MINIDUMP_SIGNATURE);
+        fixture.put_u32(20, 1_700_000_000);
         fixture.bytes
     }
 
@@ -530,8 +630,11 @@ mod tests {
     fn parses_synthetic_minidump() {
         let report = analyze_bytes(&build_minidump()).expect("minidump should parse");
         assert_eq!(report.format, DumpFormat::MiniDump);
+        assert_eq!(report.dump_type, None);
+        assert_eq!(report.captured_at.as_deref(), Some("2023-11-14T22:13:20.000Z"));
         let system = report.system.expect("system info");
         assert_eq!(system.architecture, "x64");
+        assert_eq!(system.os_version, "Windows 10");
         assert_eq!(system.build_number, 19045);
         assert_eq!(system.processor_count, 8);
         assert_eq!(report.modules.len(), 1);
@@ -551,20 +654,41 @@ mod tests {
         let mut bytes = vec![0u8; 0x2000];
         bytes[0..4].copy_from_slice(b"PAGE");
         bytes[4..8].copy_from_slice(b"DU64");
-        bytes[8..12].copy_from_slice(&10u32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&15u32.to_le_bytes());
+        bytes[12..16].copy_from_slice(&26100u32.to_le_bytes());
         bytes[0x30..0x34].copy_from_slice(&0x8664u32.to_le_bytes());
         bytes[0x34..0x38].copy_from_slice(&16u32.to_le_bytes());
-        bytes[0x38..0x3C].copy_from_slice(&0x1Au32.to_le_bytes());
-        bytes[0x40..0x48].copy_from_slice(&0xFFFF_8000_0000_0000u64.to_le_bytes());
+        bytes[0x38..0x3C].copy_from_slice(&0x4Eu32.to_le_bytes());
+        bytes[0x40..0x48].copy_from_slice(&7u64.to_le_bytes());
+        bytes[0x48..0x50].copy_from_slice(&0x00DC_E80Du64.to_le_bytes());
+        bytes[0x50..0x58].copy_from_slice(&1u64.to_le_bytes());
+        bytes[0xF98..0xF9C].copy_from_slice(&4u32.to_le_bytes());
+        // Capture time observed in a real Windows triage dump: 2026-11-04T01:09:31.038Z.
+        bytes[0xFA8..0xFB0].copy_from_slice(&0x01DD_6BF9_2574_4641u64.to_le_bytes());
 
         let report = analyze_bytes(&bytes).expect("kernel header should parse");
         assert_eq!(report.format, DumpFormat::KernelDump64);
-        assert_eq!(report.system.expect("system info").architecture, "x64");
+        assert_eq!(report.dump_type, Some(DumpType::Triage));
+        assert_eq!(report.captured_at.as_deref(), Some("2026-11-04T01:09:31.038Z"));
+        let system = report.system.expect("system info");
+        assert_eq!(system.architecture, "x64");
+        assert_eq!(system.os_version, "Windows 11");
+        assert_eq!(system.build_number, 26100);
+        assert_eq!(system.processor_count, 16);
         let bugcheck = report.bugcheck.expect("bugcheck");
-        assert_eq!(bugcheck.code, 0x1A);
-        assert_eq!(bugcheck.name, Some("KMODE_EXCEPTION_NOT_HANDLED"));
-        assert_eq!(bugcheck.parameters[0], "0xFFFF800000000000");
-        assert!(!report.warnings.is_empty());
+        assert_eq!(bugcheck.code, 0x4E);
+        assert_eq!(bugcheck.name, Some("PFN_LIST_CORRUPT"));
+        assert_eq!(bugcheck.parameters[0], "0x0000000000000007");
+        assert_eq!(bugcheck.parameter_labels[0], "subtype");
+        assert_eq!(bugcheck.parameter_notes[0], Some("A driver has unlocked a page more times than it locked it"));
+        assert!(report.warnings.iter().any(|warning| warning.starts_with("not_implemented: module-list")));
+        assert!(report.warnings.iter().any(|warning| warning.starts_with("dependency_blocked: symbol-resolve")));
+    }
+
+    #[test]
+    fn rejects_malformed_capture_time() {
+        assert_eq!(filetime_to_iso8601(0), None);
+        assert_eq!(filetime_to_iso8601(u64::MAX), None);
     }
 
     #[test]

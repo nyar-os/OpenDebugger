@@ -12,6 +12,7 @@ pub struct BugcheckInfo {
     pub name: Option<&'static str>,
     pub summary: Option<&'static str>,
     pub common_causes: Vec<&'static str>,
+    pub parameter_labels: Vec<&'static str>,
 }
 
 struct Entry {
@@ -76,6 +77,16 @@ const ENTRIES: &[Entry] = &[
             "A driver passed corrupted arguments to a kernel service",
             "Stack or object corruption caused by another driver",
             "Antivirus or filter drivers intercepting system calls",
+        ],
+    },
+    Entry {
+        code: 0x0000_004E,
+        name: "PFN_LIST_CORRUPT",
+        summary: "The page frame number (PFN) list was corrupted, so the memory manager stopped the system.",
+        causes: &[
+            "A driver unlocked a page more times than it locked it",
+            "A driver corrupted the PFN database",
+            "Failing memory that returns inconsistent page data",
         ],
     },
     Entry {
@@ -228,6 +239,28 @@ const ENTRIES: &[Entry] = &[
     },
 ];
 
+/// Labels for the four bugcheck parameters, in argument order. Codes without documented
+/// labels return an empty slice instead of invented names.
+pub fn parameter_labels(code: u32) -> &'static [&'static str] {
+    match code {
+        0x0000_004E => &["subtype", "page frame number", "current share count", "reserved"],
+        _ => &[],
+    }
+}
+
+/// Explains a parameter value when the code documents concrete subtypes. Values without a
+/// documented meaning return `None` rather than a guessed description.
+pub fn parameter_notes(code: u32, parameters: &[u64]) -> Vec<Option<&'static str>> {
+    parameters
+        .iter()
+        .enumerate()
+        .map(|(index, value)| match (code, index, *value) {
+            (0x0000_004E, 0, 0x7) => Some("A driver has unlocked a page more times than it locked it"),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Looks up a bugcheck code in the built-in table. Unknown codes return a result with `known = false`.
 pub fn lookup_bugcheck(code: u32) -> BugcheckInfo {
     let entry = ENTRIES.iter().find(|entry| entry.code == code);
@@ -238,6 +271,7 @@ pub fn lookup_bugcheck(code: u32) -> BugcheckInfo {
         name: entry.map(|entry| entry.name),
         summary: entry.map(|entry| entry.summary),
         common_causes: entry.map(|entry| entry.causes.to_vec()).unwrap_or_default(),
+        parameter_labels: parameter_labels(code).to_vec(),
     }
 }
 
@@ -273,6 +307,24 @@ mod tests {
         assert!(!info.known);
         assert!(info.name.is_none());
         assert!(info.common_causes.is_empty());
+        assert!(info.parameter_labels.is_empty());
+    }
+
+    #[test]
+    fn pfn_list_corrupt_explains_its_parameters() {
+        let info = lookup_bugcheck(0x4E);
+        assert!(info.known);
+        assert_eq!(info.name, Some("PFN_LIST_CORRUPT"));
+        assert_eq!(info.parameter_labels, vec!["subtype", "page frame number", "current share count", "reserved"]);
+
+        let parameters = [7, 0x00DC_E80D, 1, 0];
+        let notes = parameter_notes(0x4E, &parameters);
+        assert_eq!(
+            notes[0],
+            Some("A driver has unlocked a page more times than it locked it"),
+            "arg 1 subtype 7 is documented by the debugger output"
+        );
+        assert!(notes[1..].iter().all(Option::is_none));
     }
 
     #[test]

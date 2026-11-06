@@ -58,7 +58,9 @@ mod tests {
     fn sample() -> DumpReport {
         DumpReport {
             format: DumpFormat::MiniDump,
+            dump_type: None,
             size_bytes: 576,
+            captured_at: None,
             system: None,
             bugcheck: None,
             exception: None,
