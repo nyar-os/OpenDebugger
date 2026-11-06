@@ -46,9 +46,10 @@ Capabilities are reported as available, or blocked with one of `unsupported_plat
 | Capability | State |
 |---|---|
 | `dump-parse` | available |
-| `kernel-dump` | available (real kernel dumps are not yet verified) |
+| `kernel-dump` | available, verified against a real Windows triage dump |
 | `bugcheck-lookup` | available |
 | `module-list` | available |
+| `kernel-module-list` | available on Windows, `unsupported_platform` elsewhere |
 | `report-write` | available |
 | `gui` | available on Windows |
 | `symbol-resolve` | `not_implemented` on Windows, `unsupported_platform` elsewhere |
@@ -62,8 +63,15 @@ target Windows, and the build ships for `win32-x64` only. It does not simulate t
 capabilities on macOS, Linux or Arm hosts, and there is no portable dump or symbol
 implementation behind a compatibility facade.
 
-Symbol resolution, stack unwinding and live attach are not implemented on any platform
-yet. They report a structured capability state instead of returning partial data.
+Kernel triage dumps are read without page tables: the descriptor area yields the loaded
+module table, the crash stack block and the faulting context, and stack frames are reported
+as `MODULE+offset` with their source marked as `context`, `call-site` or `scan`. A triage
+dump carries no unwind metadata, so frames are not a metadata-driven unwind.
+
+Function names need a `dbgeng` or `dbghelp` binding, which this crate does not call yet.
+The engine libraries, headers and a local symbol cache exist on a machine with Windows
+Debugging Tools installed, and `cdb` there resolves the same dump, but the local cache and
+the network availability of `msdl` are outside this tool's contract.
 
 ## License
 

@@ -18,10 +18,16 @@ asks why the machine bugchecked.
 ## Reading the result
 
 - `dump-parse`, `kernel-dump`, `bugcheck-lookup` and `module-list` are portable
-  and report `available: true` on every build target.
+  and report `available: true` on every build target. `kernel-module-list` is
+  available on Windows only.
 - `symbol-resolve`, `stack-unwind` and `live-attach` report `not_implemented`
-  on Windows and `unsupported_platform` elsewhere. Do not present a stack trace
-  or a blamed driver as fact when those capabilities are unavailable.
+  on Windows and `unsupported_platform` elsewhere. Function names need a
+  `dbgeng` or `dbghelp` binding, which the core crate does not call.
+- A kernel triage dump reports frames as `MODULE+offset` with a `source` of
+  `context`, `call-site` or `scan`. Treat a `scan` frame as unverified and do
+  not name it as the cause.
+- `stackModuleBases` lists image references that appear as words on the crash
+  stack. They show what was being handled, not what failed.
 - A minidump normally has no `bugcheck` field. Kernel dumps carry the code and
   four parameters in the header.
 - Module names show what was loaded, not what failed. Correlate the bugcheck

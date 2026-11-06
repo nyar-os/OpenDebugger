@@ -71,19 +71,23 @@ pub fn capabilities() -> Capabilities {
     let windows_only = if windows { CapabilityState::NotImplemented } else { CapabilityState::UnsupportedPlatform };
     let windows_only_detail = if windows { "not implemented yet on Windows" } else { "this capability is implemented for Windows only" };
     let kernel_module_detail = if windows {
-        "kernel module enumeration needs virtual-to-physical address translation, which is not implemented"
+        "loaded module names, bases and sizes are read from the triage module table, and frames resolve to `MODULE+offset` only"
     }
     else {
         "kernel module enumeration is implemented for Windows only"
     };
     let symbol_detail = if windows {
-        "requires binding the Windows debug engine and a configured symbol path"
+        "function names need a `dbgeng` or `dbghelp` binding: the engine libraries, headers and a local symbol cache exist on this machine, but this crate does not call them yet"
     }
     else {
         "the Windows debug engine is available on Windows only"
     };
-    let stack_detail =
-        if windows { "requires binding the Windows debug engine" } else { "the Windows debug engine is available on Windows only" };
+    let stack_detail = if windows {
+        "a triage dump carries no unwind metadata, so frames come from the faulting context plus verified call sites in the crash stack block rather than a real unwind"
+    }
+    else {
+        "the Windows debug engine is available on Windows only"
+    };
 
     let mut entries = vec![
         available(CAP_DUMP_PARSE, "minidump (MDMP) container parsing is available on every build target"),
@@ -93,7 +97,12 @@ pub fn capabilities() -> Capabilities {
         ),
         available(CAP_BUGCHECK, "built-in bugcheck code table"),
         available(CAP_MODULE_LIST, "module records are read from the minidump module list stream only"),
-        blocked(CAP_KERNEL_MODULE_LIST, windows_only, kernel_module_detail),
+        if windows {
+            available(CAP_KERNEL_MODULE_LIST, kernel_module_detail)
+        }
+        else {
+            blocked(CAP_KERNEL_MODULE_LIST, CapabilityState::UnsupportedPlatform, kernel_module_detail)
+        },
         available(CAP_REPORT_WRITE, "report documents are written to a caller-supplied file path"),
         blocked(CAP_SYMBOL_RESOLVE, windows_only, symbol_detail),
         blocked(CAP_STACK_UNWIND, windows_only, stack_detail),
@@ -141,12 +150,18 @@ mod tests {
     }
 
     #[test]
-    fn kernel_module_list_is_not_claimed_as_available() {
+    fn kernel_module_list_is_available_on_windows_only() {
         let report = capabilities();
         let entry = report.entries.iter().find(|entry| entry.capability == CAP_KERNEL_MODULE_LIST).expect("entry");
-        assert!(!entry.available, "kernel module enumeration is not implemented");
-        let expected = if cfg!(windows) { CapabilityState::NotImplemented } else { CapabilityState::UnsupportedPlatform };
-        assert_eq!(entry.code, Some(expected));
+        if cfg!(windows) {
+            assert!(entry.available);
+            assert!(entry.code.is_none());
+            assert!(entry.detail.contains("triage module table"));
+        }
+        else {
+            assert!(!entry.available);
+            assert_eq!(entry.code, Some(CapabilityState::UnsupportedPlatform));
+        }
     }
 
     #[test]

@@ -54,9 +54,10 @@ and `zh-CN`.
 | Capability | Windows x64 |
 |---|---|
 | `dump-parse` | available |
-| `kernel-dump` | available, real kernel dump verification pending |
+| `kernel-dump` | available, verified against a real Windows triage dump |
 | `bugcheck-lookup` | available |
 | `module-list` | available |
+| `kernel-module-list` | available |
 | `report-write` | available |
 | `gui` | available |
 | `symbol-resolve` | `not_implemented` |
@@ -69,8 +70,13 @@ capability returns synthetic data when it is unavailable.
 ## Platform limits
 
 OpenDebugger is Windows-bound by design. The package does not emulate dump parsing,
-symbol handling or a GUI on other platforms, and no portable fallback is provided. Symbol
-resolution, stack unwinding and live attach are not implemented yet on any platform.
+symbol handling or a GUI on other platforms, and no portable fallback is provided. Live
+attach is not implemented yet on any platform.
+
+Kernel triage dumps resolve loaded modules and stack frames to `MODULE+offset`. Frames
+carry a `source` of `context`, `call-site` or `scan` because a triage dump has no unwind
+metadata. Function names need a `dbgeng` or `dbghelp` binding that the core crate does not
+call yet.
 
 ## Agent skills
 
