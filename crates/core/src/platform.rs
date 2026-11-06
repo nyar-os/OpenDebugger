@@ -6,6 +6,7 @@ pub const CAP_DUMP_PARSE: &str = "dump-parse";
 pub const CAP_KERNEL_DUMP: &str = "kernel-dump";
 pub const CAP_BUGCHECK: &str = "bugcheck-lookup";
 pub const CAP_MODULE_LIST: &str = "module-list";
+pub const CAP_KERNEL_MODULE_LIST: &str = "kernel-module-list";
 pub const CAP_REPORT_WRITE: &str = "report-write";
 pub const CAP_SYMBOL_RESOLVE: &str = "symbol-resolve";
 pub const CAP_STACK_UNWIND: &str = "stack-unwind";
@@ -69,15 +70,33 @@ pub fn capabilities() -> Capabilities {
     let windows = cfg!(windows);
     let windows_only = if windows { CapabilityState::NotImplemented } else { CapabilityState::UnsupportedPlatform };
     let windows_only_detail = if windows { "not implemented yet on Windows" } else { "this capability is implemented for Windows only" };
+    let kernel_module_detail = if windows {
+        "kernel module enumeration needs virtual-to-physical address translation, which is not implemented"
+    }
+    else {
+        "kernel module enumeration is implemented for Windows only"
+    };
+    let symbol_detail = if windows {
+        "requires binding the Windows debug engine and a configured symbol path"
+    }
+    else {
+        "the Windows debug engine is available on Windows only"
+    };
+    let stack_detail =
+        if windows { "requires binding the Windows debug engine" } else { "the Windows debug engine is available on Windows only" };
 
     let mut entries = vec![
         available(CAP_DUMP_PARSE, "minidump (MDMP) container parsing is available on every build target"),
-        available(CAP_KERNEL_DUMP, "kernel dump header parsing follows the documented Windows layout, real-dump verification is pending"),
+        available(
+            CAP_KERNEL_DUMP,
+            "kernel dump header parsing follows the documented `DUMP_HEADER64` layout and is verified against a real Windows triage dump",
+        ),
         available(CAP_BUGCHECK, "built-in bugcheck code table"),
-        available(CAP_MODULE_LIST, "module records are read from the minidump module list stream"),
+        available(CAP_MODULE_LIST, "module records are read from the minidump module list stream only"),
+        blocked(CAP_KERNEL_MODULE_LIST, windows_only, kernel_module_detail),
         available(CAP_REPORT_WRITE, "report documents are written to a caller-supplied file path"),
-        blocked(CAP_SYMBOL_RESOLVE, windows_only, windows_only_detail),
-        blocked(CAP_STACK_UNWIND, windows_only, windows_only_detail),
+        blocked(CAP_SYMBOL_RESOLVE, windows_only, symbol_detail),
+        blocked(CAP_STACK_UNWIND, windows_only, stack_detail),
         blocked(CAP_LIVE_ATTACH, windows_only, windows_only_detail),
     ];
 
@@ -119,6 +138,15 @@ mod tests {
             assert!(entry.available, "{capability} should be portable");
             assert!(entry.code.is_none());
         }
+    }
+
+    #[test]
+    fn kernel_module_list_is_not_claimed_as_available() {
+        let report = capabilities();
+        let entry = report.entries.iter().find(|entry| entry.capability == CAP_KERNEL_MODULE_LIST).expect("entry");
+        assert!(!entry.available, "kernel module enumeration is not implemented");
+        let expected = if cfg!(windows) { CapabilityState::NotImplemented } else { CapabilityState::UnsupportedPlatform };
+        assert_eq!(entry.code, Some(expected));
     }
 
     #[test]
