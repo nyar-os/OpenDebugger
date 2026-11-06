@@ -1,10 +1,12 @@
-use std::{fs, path::Path};
+use std::{cell::RefCell, path::Path};
 
 use serde::Serialize;
 
 use crate::{
     bugcheck::{lookup_bugcheck, parameter_labels, parameter_notes},
     error::{Error, Result},
+    input::{self as byte_source, FileReader, Input},
+    triage::{self},
 };
 
 const MINIDUMP_SIGNATURE: u32 = 0x504D_444D;
@@ -87,6 +89,51 @@ pub struct ThreadInfo {
     pub thread_id: u32,
 }
 
+/// How a stack frame was recovered from a triage dump.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StackFrameSource {
+    /// Taken from the faulting context's instruction pointer.
+    Context,
+    /// A stack word that resolves into a module and whose preceding bytes encode a call.
+    CallSite,
+    /// A stack word inside a module range that could not be checked against the module image.
+    Scan,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StackFrame {
+    pub address: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset_in_module: Option<String>,
+    pub source: StackFrameSource,
+}
+
+/// A loaded module whose base address appears as a word on the crash stack.
+///
+/// This is a dump fact, not an attribution: a module base on the stack is an argument that
+/// refers to the image, and it does not by itself prove the module caused the bugcheck.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StackReference {
+    pub address: String,
+    pub module: String,
+}
+
+/// A page frame number carried by a bugcheck parameter, resolved to its PFN database entry.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhysicalPage {
+    pub pfn: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database_entry: Option<String>,
+    /// False when the triage dump does not map the PFN database page.
+    pub in_dump: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExceptionInfo {
@@ -125,6 +172,12 @@ pub struct DumpReport {
     pub exception: Option<ExceptionInfo>,
     pub modules: Vec<ModuleInfo>,
     pub threads: Vec<ThreadInfo>,
+    /// Frames recovered from the faulting context and crash stack; kernel triage dumps only.
+    pub stack: Vec<StackFrame>,
+    /// Module bases observed as words on the crash stack, deduplicated by module and address.
+    pub stack_module_bases: Vec<StackReference>,
+    /// Page frame number carried by a bugcheck parameter, with its PFN database entry.
+    pub physical_page: Option<PhysicalPage>,
     pub process_id: Option<u32>,
     pub warnings: Vec<String>,
 }
@@ -141,6 +194,9 @@ impl DumpReport {
             exception: None,
             modules: Vec::new(),
             threads: Vec::new(),
+            stack: Vec::new(),
+            stack_module_bases: Vec::new(),
+            physical_page: None,
             process_id: None,
             warnings: Vec::new(),
         }
@@ -148,34 +204,51 @@ impl DumpReport {
 }
 
 /// Reads a dump file and returns the parsed report.
+///
+/// Only the header and the blocks a report needs are transferred, so a multi-gigabyte kernel
+/// dump is never loaded into memory as a whole.
 pub fn analyze_file(path: &Path) -> Result<DumpReport> {
-    let bytes = fs::read(path).map_err(|source| Error::io(path.display().to_string(), source))?;
-    analyze_bytes(&bytes)
+    let reader = RefCell::new(FileReader::open(path)?);
+    analyze_input(&Input::File(&reader))
+}
+
+/// Same as `analyze_file` but also reports how many bytes were transferred, for tests that
+/// prove a large dump is read in ranges rather than loaded whole.
+#[cfg(test)]
+pub(crate) fn analyze_file_bytes_read(path: &Path) -> Result<(DumpReport, u64)> {
+    let reader = RefCell::new(FileReader::open(path)?);
+    let input = Input::File(&reader);
+    let report = analyze_input(&input)?;
+    Ok((report, input.bytes_read()))
 }
 
 /// Parses dump bytes. Supports Windows minidumps (`MDMP`) and kernel dump headers (`PAGE`).
 pub fn analyze_bytes(bytes: &[u8]) -> Result<DumpReport> {
-    let signature = read_u32(bytes, 0).ok_or_else(|| Error::message("file is too small to contain a dump header"))?;
+    analyze_input(&Input::Bytes(bytes))
+}
+
+fn analyze_input(input: &Input) -> Result<DumpReport> {
+    let signature = read_u32(input, 0).ok_or_else(|| Error::message("file is too small to contain a dump header"))?;
     match signature {
-        MINIDUMP_SIGNATURE => parse_minidump(bytes),
-        PAGE_SIGNATURE => parse_kernel_dump(bytes),
+        MINIDUMP_SIGNATURE => parse_minidump(input),
+        PAGE_SIGNATURE => parse_kernel_dump(input),
         other => Err(Error::message(format!("unrecognized dump signature 0x{other:08X}; expected a Windows minidump or kernel dump"))),
     }
 }
 
-fn parse_minidump(bytes: &[u8]) -> Result<DumpReport> {
+fn parse_minidump(bytes: &Input) -> Result<DumpReport> {
     let stream_count = read_u32(bytes, 8).ok_or_else(|| Error::message("truncated minidump header"))?;
     let directory_rva = read_u32(bytes, 12).ok_or_else(|| Error::message("truncated minidump header"))?;
     if stream_count > MAX_STREAMS {
         return Err(Error::message(format!("minidump declares {stream_count} streams, which exceeds the supported limit")));
     }
 
-    let mut report = DumpReport::new(DumpFormat::MiniDump, bytes.len() as u64);
+    let mut report = DumpReport::new(DumpFormat::MiniDump, bytes.len());
     report.captured_at = read_u32(bytes, 20).filter(|value| *value > 0).and_then(|value| iso8601_from_unix_ms(i64::from(value) * 1000));
 
     for index in 0..stream_count {
         let entry_rva = directory_rva as usize + index as usize * 12;
-        if entry_rva.checked_add(12).is_none_or(|end| end > bytes.len()) {
+        if entry_rva.checked_add(12).is_none_or(|end| end as u64 > bytes.len()) {
             report.warnings.push(format!("stream directory entry {index} is out of bounds"));
             break;
         }
@@ -216,7 +289,7 @@ fn parse_minidump(bytes: &[u8]) -> Result<DumpReport> {
     Ok(report)
 }
 
-fn parse_system_info(bytes: &[u8], rva: u32) -> Option<SystemInfo> {
+fn parse_system_info(bytes: &Input, rva: u32) -> Option<SystemInfo> {
     let architecture = read_u16(bytes, rva)?;
     let processor_count = read_u8(bytes, rva + 6)?;
     let product_type = read_u8(bytes, rva + 7)?;
@@ -234,7 +307,7 @@ fn parse_system_info(bytes: &[u8], rva: u32) -> Option<SystemInfo> {
     })
 }
 
-fn parse_module_list(bytes: &[u8], rva: u32) -> Option<Vec<ModuleInfo>> {
+fn parse_module_list(bytes: &Input, rva: u32) -> Option<Vec<ModuleInfo>> {
     let count = read_u32(bytes, rva)?;
     if count > MAX_MODULES {
         return None;
@@ -252,7 +325,7 @@ fn parse_module_list(bytes: &[u8], rva: u32) -> Option<Vec<ModuleInfo>> {
     Some(modules)
 }
 
-fn parse_thread_list(bytes: &[u8], rva: u32) -> Option<Vec<ThreadInfo>> {
+fn parse_thread_list(bytes: &Input, rva: u32) -> Option<Vec<ThreadInfo>> {
     let count = read_u32(bytes, rva)?;
     if count > 65_536 {
         return None;
@@ -266,7 +339,7 @@ fn parse_thread_list(bytes: &[u8], rva: u32) -> Option<Vec<ThreadInfo>> {
     Some(threads)
 }
 
-fn parse_exception(bytes: &[u8], rva: u32) -> Option<ExceptionInfo> {
+fn parse_exception(bytes: &Input, rva: u32) -> Option<ExceptionInfo> {
     let thread_id = read_u32(bytes, rva)?;
     let code = read_u32(bytes, rva + 8)?;
     let address = read_u64(bytes, rva + 24)?;
@@ -278,7 +351,7 @@ fn parse_exception(bytes: &[u8], rva: u32) -> Option<ExceptionInfo> {
     Some(ExceptionInfo { thread_id, code: format!("0x{code:08X}"), code_value: code, address: hex64(address), parameters })
 }
 
-fn parse_process_id(bytes: &[u8], rva: u32) -> Option<u32> {
+fn parse_process_id(bytes: &Input, rva: u32) -> Option<u32> {
     let flags = read_u32(bytes, rva + 4)?;
     if flags & 0x1 == 0 {
         return None;
@@ -286,7 +359,7 @@ fn parse_process_id(bytes: &[u8], rva: u32) -> Option<u32> {
     read_u32(bytes, rva + 8)
 }
 
-fn parse_kernel_dump(bytes: &[u8]) -> Result<DumpReport> {
+fn parse_kernel_dump(bytes: &Input) -> Result<DumpReport> {
     let valid_dump = read_u32(bytes, 4).ok_or_else(|| Error::message("truncated kernel dump header"))?;
     let (format, bugcheck_offset, parameter_offset, machine_offset, processor_offset) = match valid_dump {
         DUMP64_SIGNATURE => (DumpFormat::KernelDump64, 0x38, 0x40, 0x30, 0x34),
@@ -302,7 +375,7 @@ fn parse_kernel_dump(bytes: &[u8]) -> Result<DumpReport> {
     let bugcheck_code = read_u32(bytes, bugcheck_offset).ok_or_else(|| Error::message("truncated kernel dump header"))?;
 
     let is_64 = matches!(format, DumpFormat::KernelDump64);
-    let mut report = DumpReport::new(format, bytes.len() as u64);
+    let mut report = DumpReport::new(format, bytes.len());
     if is_64 {
         // `DUMP_TYPE` and the capture time sit behind the memory descriptors of the 64-bit header.
         report.dump_type = read_u32(bytes, 0xF98).map(DumpType::from_header);
@@ -316,6 +389,7 @@ fn parse_kernel_dump(bytes: &[u8]) -> Result<DumpReport> {
         product_type: "unknown".to_string(),
     });
 
+    let mut pfn = None;
     if bugcheck_code == 0 {
         report.warnings.push("kernel dump header contains no bugcheck code".to_string());
     }
@@ -327,6 +401,10 @@ fn parse_kernel_dump(bytes: &[u8]) -> Result<DumpReport> {
             })
             .collect::<Vec<_>>();
         let info = lookup_bugcheck(bugcheck_code);
+        let labels = parameter_labels(bugcheck_code);
+        if let Some(index) = labels.iter().position(|label| label.contains("page frame number")) {
+            pfn = values.get(index).copied().filter(|value| *value > 0);
+        }
         report.bugcheck = Some(BugcheckSummary {
             code: bugcheck_code,
             code_hex: format!("0x{bugcheck_code:08X}"),
@@ -334,27 +412,53 @@ fn parse_kernel_dump(bytes: &[u8]) -> Result<DumpReport> {
             name: info.name,
             summary: info.summary,
             common_causes: info.common_causes,
-            parameter_labels: parameter_labels(bugcheck_code).to_vec(),
+            parameter_labels: labels.to_vec(),
             parameter_notes: parameter_notes(bugcheck_code, &values),
             parameters: values.iter().map(|value| hex64(*value)).collect(),
         });
     }
 
+    let mut triage = if is_64 { triage::parse(bytes) } else { None };
+    if let Some(triage) = triage.as_mut() {
+        report.modules = triage
+            .modules
+            .iter()
+            .map(|module| ModuleInfo {
+                name: module.name.clone(),
+                base_address: hex64(module.base),
+                size_bytes: module.size,
+                timestamp: module.timestamp,
+            })
+            .collect();
+        if report.modules.is_empty() {
+            report.warnings.push("the triage dump did not expose a loadable module table".to_string());
+        }
+        let (stack, references) = triage::stack_frames(bytes, triage);
+        report.stack = stack;
+        report.stack_module_bases = references;
+        report.warnings.append(&mut triage.warnings);
+    }
+    else {
+        report.warnings.push("the triage descriptor area could not be located in this kernel dump".to_string());
+    }
+
+    if let (Some(pfn), Some(triage)) = (pfn, triage.as_ref()) {
+        let database_entry = triage.pfn_database_base.map(|base| triage::pfn_database_entry(base, pfn));
+        let in_dump = triage
+            .stack_block
+            .as_ref()
+            .is_some_and(|block| database_entry.is_some_and(|entry| entry >= block.va && entry < block.va + u64::from(block.size)));
+        report.physical_page = Some(PhysicalPage { pfn, database_entry: database_entry.map(hex64), in_dump });
+        if !in_dump {
+            report.warnings.push(format!(
+                "PFN 0x{pfn:X} is a physical page number, and its database entry is outside the blocks this triage dump maps, so MMPFN contents are unavailable"
+            ));
+        }
+    }
+    report.warnings.push("a triage dump carries only the faulting context, so per-thread enumeration is unavailable".to_string());
     report.warnings.push(
-        "not_implemented: module-list: kernel triage dumps carry module names only inside mapped memory, and this parser does not translate virtual addresses, so module and `MODULE+offset` attribution is unavailable"
-            .to_string(),
+        "frames report module and offset only: function names require a debug engine and a PDB whose timestamp matches the module".to_string(),
     );
-    report.warnings.push(
-        "not_implemented: thread-list: kernel triage dumps store only the faulting context, so per-thread enumeration is unavailable"
-            .to_string(),
-    );
-    report.warnings.push(
-        "not_implemented: stack-unwind: recovering a module+offset stack needs the Windows debug engine, which this build does not bind"
-            .to_string(),
-    );
-    report
-        .warnings
-        .push("dependency_blocked: symbol-resolve: symbol names need the Windows debug engine and a configured symbol path".to_string());
     Ok(report)
 }
 
@@ -439,36 +543,31 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
-fn read_utf16_string(bytes: &[u8], rva: u32) -> Option<String> {
+fn read_utf16_string(bytes: &Input, rva: u32) -> Option<String> {
     let byte_length = read_u32(bytes, rva)?;
     if byte_length > MAX_STRING_BYTES || byte_length % 2 != 0 {
         return None;
     }
-    let start = rva as usize + 4;
-    let end = start.checked_add(byte_length as usize)?;
-    let data = bytes.get(start..end)?;
+    let data = bytes.read(u64::from(rva).checked_add(4)?, byte_length)?;
     let (chunks, _) = data.as_chunks::<2>();
     let units: Vec<u16> = chunks.iter().map(|chunk| u16::from_le_bytes(*chunk)).collect();
     Some(String::from_utf16_lossy(&units))
 }
 
-fn read_u8(bytes: &[u8], offset: u32) -> Option<u8> {
-    bytes.get(offset as usize).copied()
+fn read_u8(bytes: &Input, offset: u32) -> Option<u8> {
+    byte_source::read_u8(bytes, u64::from(offset))
 }
 
-fn read_u16(bytes: &[u8], offset: u32) -> Option<u16> {
-    let data = bytes.get(offset as usize..offset as usize + 2)?;
-    Some(u16::from_le_bytes([data[0], data[1]]))
+fn read_u16(bytes: &Input, offset: u32) -> Option<u16> {
+    byte_source::read_u16(bytes, u64::from(offset))
 }
 
-fn read_u32(bytes: &[u8], offset: u32) -> Option<u32> {
-    let data = bytes.get(offset as usize..offset as usize + 4)?;
-    Some(u32::from_le_bytes([data[0], data[1], data[2], data[3]]))
+fn read_u32(bytes: &Input, offset: u32) -> Option<u32> {
+    byte_source::read_u32(bytes, u64::from(offset))
 }
 
-fn read_u64(bytes: &[u8], offset: u32) -> Option<u64> {
-    let data = bytes.get(offset as usize..offset as usize + 8)?;
-    Some(u64::from_le_bytes([data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]]))
+fn read_u64(bytes: &Input, offset: u32) -> Option<u64> {
+    byte_source::read_u64(bytes, u64::from(offset))
 }
 
 fn hex64(value: u64) -> String {
@@ -681,8 +780,133 @@ mod tests {
         assert_eq!(bugcheck.parameters[0], "0x0000000000000007");
         assert_eq!(bugcheck.parameter_labels[0], "subtype");
         assert_eq!(bugcheck.parameter_notes[0], Some("A driver has unlocked a page more times than it locked it"));
-        assert!(report.warnings.iter().any(|warning| warning.starts_with("not_implemented: module-list")));
-        assert!(report.warnings.iter().any(|warning| warning.starts_with("dependency_blocked: symbol-resolve")));
+        assert!(report.warnings.iter().any(|warning| warning.contains("triage descriptor area")));
+        assert!(report.modules.is_empty());
+        assert!(report.stack.is_empty());
+    }
+
+    /// Builds a small kernel triage dump that exercises the descriptor scan, the module table,
+    /// the crash stack block and the PFN database entry derivation.
+    fn build_triage_dump() -> Vec<u8> {
+        const CONTEXT: usize = 0x2400;
+        const MODULE_TABLE: usize = 0x2600;
+        const NAME_TABLE: usize = 0x3000;
+        const STACK: usize = 0x3100;
+        const STACK_SIZE: usize = 0x200;
+        const MODULE_COUNT: u32 = 9;
+
+        let mut bytes = vec![0u8; STACK + STACK_SIZE];
+        bytes[0..4].copy_from_slice(b"PAGE");
+        bytes[4..8].copy_from_slice(b"DU64");
+        bytes[8..12].copy_from_slice(&15u32.to_le_bytes());
+        bytes[12..16].copy_from_slice(&26100u32.to_le_bytes());
+        bytes[0x18..0x20].copy_from_slice(&0xFFFF_D580_0000_0000u64.to_le_bytes());
+        bytes[0x30..0x34].copy_from_slice(&0x8664u32.to_le_bytes());
+        bytes[0x34..0x38].copy_from_slice(&16u32.to_le_bytes());
+        bytes[0x38..0x3C].copy_from_slice(&0x4Eu32.to_le_bytes());
+        bytes[0x40..0x48].copy_from_slice(&7u64.to_le_bytes());
+        bytes[0x48..0x50].copy_from_slice(&0x00DC_E80Du64.to_le_bytes());
+        bytes[0xF98..0xF9C].copy_from_slice(&4u32.to_le_bytes());
+
+        bytes[0x200C..0x2010].copy_from_slice(&(CONTEXT as u32).to_le_bytes());
+        bytes[CONTEXT + 0x98..CONTEXT + 0xA0].copy_from_slice(&0xFFFF_8000_0000_5000u64.to_le_bytes());
+        bytes[CONTEXT + 0xF8..CONTEXT + 0x100].copy_from_slice(&0xFFFF_8000_0000_1000u64.to_le_bytes());
+
+        bytes[0x2028..0x202C].copy_from_slice(&(STACK as u32).to_le_bytes());
+        bytes[0x202C..0x2030].copy_from_slice(&(STACK_SIZE as u32).to_le_bytes());
+        bytes[0x2030..0x2034].copy_from_slice(&(MODULE_TABLE as u32).to_le_bytes());
+        bytes[0x2034..0x2038].copy_from_slice(&MODULE_COUNT.to_le_bytes());
+        bytes[0x2038..0x203C].copy_from_slice(&(NAME_TABLE as u32).to_le_bytes());
+        bytes[0x203C..0x2040].copy_from_slice(&0x100u32.to_le_bytes());
+        bytes[0x2048..0x2050].copy_from_slice(&0xFFFF_8000_0000_5000u64.to_le_bytes());
+
+        let mut name_cursor = NAME_TABLE;
+        for index in 0..MODULE_COUNT as usize {
+            let name = format!("fake-{index}.sys");
+            let record = MODULE_TABLE + index * 0x90;
+            bytes[record..record + 8].copy_from_slice(&(name_cursor as u64).to_le_bytes());
+            bytes[record + 0x38..record + 0x40].copy_from_slice(&(0xFFFF_8000_0000_1000u64 + index as u64 * 0x1000).to_le_bytes());
+            bytes[record + 0x48..record + 0x4C].copy_from_slice(&0x1000u32.to_le_bytes());
+            bytes[record + 0x88..record + 0x8C].copy_from_slice(&0x1234_5678u32.to_le_bytes());
+            bytes[name_cursor..name_cursor + 4].copy_from_slice(&(name.len() as u32).to_le_bytes());
+            for (unit, character) in name.encode_utf16().enumerate() {
+                let at = name_cursor + 4 + unit * 2;
+                bytes[at..at + 2].copy_from_slice(&character.to_le_bytes());
+            }
+            name_cursor += 4 + name.len() * 2;
+        }
+
+        // Return address inside the second module, a non-module word, and a module base.
+        bytes[STACK..STACK + 8].copy_from_slice(&0xFFFF_8000_0000_2010u64.to_le_bytes());
+        bytes[STACK + 8..STACK + 16].copy_from_slice(&0xFFFF_F800_0000_0000u64.to_le_bytes());
+        bytes[STACK + 16..STACK + 24].copy_from_slice(&0xFFFF_8000_0000_2000u64.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn parses_synthetic_triage_modules_and_stack() {
+        let report = analyze_bytes(&build_triage_dump()).expect("triage dump should parse");
+        assert_eq!(report.format, DumpFormat::KernelDump64);
+        assert_eq!(report.modules.len(), 9);
+        assert_eq!(report.modules[0].name, "fake-0.sys");
+        assert_eq!(report.modules[0].base_address, "0xFFFF800000001000");
+        assert_eq!(report.modules[1].base_address, "0xFFFF800000002000");
+
+        let context = report.stack.first().expect("context frame");
+        assert_eq!(context.source, StackFrameSource::Context);
+        assert_eq!(context.module.as_deref(), Some("fake-0.sys"));
+        assert_eq!(context.offset_in_module.as_deref(), Some("0x0"));
+
+        let scanned = report.stack.get(1).expect("scanned frame");
+        assert_eq!(scanned.source, StackFrameSource::Scan);
+        assert_eq!(scanned.module.as_deref(), Some("fake-1.sys"));
+        assert_eq!(scanned.offset_in_module.as_deref(), Some("0x10"));
+
+        let reference = report.stack_module_bases.first().expect("module base on the stack");
+        assert_eq!(reference.address, "0xFFFF800000002000");
+        assert_eq!(reference.module, "fake-1.sys");
+        assert_eq!(report.stack_module_bases.len(), 1);
+
+        let page = report.physical_page.expect("pfn parameter");
+        assert_eq!(page.pfn, 0x00DC_E80D);
+        assert_eq!(page.database_entry.as_deref(), Some("0xFFFFD580296B8270"));
+        assert!(!page.in_dump);
+        assert!(!report.warnings.iter().any(|warning| warning.starts_with("not_implemented")));
+    }
+
+    #[test]
+    fn analyze_file_reads_only_the_ranges_it_needs() {
+        use std::io::Write;
+
+        let path = std::env::temp_dir().join(format!("open-debugger-stream-{}.dmp", std::process::id()));
+        let bytes = build_minidump();
+        {
+            let mut file = std::fs::File::create(&path).expect("create temp dump");
+            file.write_all(&bytes).expect("write header and streams");
+            file.write_all(&vec![0u8; 8 * 1024 * 1024]).expect("write padding");
+        }
+        let (report, transferred) = analyze_file_bytes_read(&path).expect("padded dump should parse");
+        std::fs::remove_file(&path).ok();
+        assert!(report.size_bytes > 8 * 1024 * 1024);
+        assert_eq!(report.modules.len(), 1);
+        assert_eq!(report.threads.len(), 2);
+        assert!(transferred < 64 * 1024, "expected range reads, transferred {transferred} bytes");
+    }
+
+    /// Manual verification against a machine-local dump. Enable with
+    /// `OPEN_DEBUGGER_REAL_DUMP=<path> cargo test -p open-debugger-core -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "requires OPEN_DEBUGGER_REAL_DUMP pointing at a Windows kernel triage dump"]
+    fn real_kernel_dump_resolves_modules_and_stack() {
+        let Some(path) = std::env::var_os("OPEN_DEBUGGER_REAL_DUMP")
+        else {
+            return;
+        };
+        let report = analyze_file(Path::new(&path)).expect("dump should parse");
+        println!("{}", serde_json::to_string_pretty(&report).expect("serialize report"));
+        assert!(!report.modules.is_empty());
+        assert!(report.stack.len() > 1);
+        assert!(report.stack[0].module.is_some());
     }
 
     #[test]

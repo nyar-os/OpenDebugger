@@ -66,6 +66,9 @@ mod tests {
             exception: None,
             modules: Vec::new(),
             threads: Vec::new(),
+            stack: Vec::new(),
+            stack_module_bases: Vec::new(),
+            physical_page: None,
             process_id: None,
             warnings: vec!["synthetic".into()],
         }
