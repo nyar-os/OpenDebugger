@@ -122,11 +122,12 @@ fn bucket_capacity(entries: usize) -> u32 {
 }
 
 /// Builds a DBI stream holding only a valid 68-byte header.
-pub(crate) fn dbi_stream(public_stream: u16, symbol_record_stream: u16) -> Vec<u8> {
+pub(crate) fn dbi_stream(global_stream: u16, public_stream: u16, symbol_record_stream: u16) -> Vec<u8> {
     let mut bytes = vec![0u8; 68];
     bytes[0..4].copy_from_slice(&u32::MAX.to_le_bytes());
     bytes[4..8].copy_from_slice(&19_990_903u32.to_le_bytes());
     bytes[8..12].copy_from_slice(&1u32.to_le_bytes());
+    bytes[0x0C..0x0E].copy_from_slice(&global_stream.to_le_bytes());
     bytes[0x10..0x12].copy_from_slice(&public_stream.to_le_bytes());
     bytes[0x14..0x16].copy_from_slice(&symbol_record_stream.to_le_bytes());
     bytes

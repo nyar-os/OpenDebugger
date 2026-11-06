@@ -118,6 +118,8 @@ pub enum StreamRole {
     TypeInfo,
     DebugInfo,
     IdInfo,
+    /// Global symbol hash table the DBI header points at.
+    GlobalSymbols,
     PublicSymbols,
     SymbolRecords,
     Named,
@@ -236,6 +238,7 @@ impl PdbFile {
             TYPE_INFO_STREAM => StreamRole::TypeInfo,
             DBI_STREAM => StreamRole::DebugInfo,
             ID_INFO_STREAM => StreamRole::IdInfo,
+            _ if index == u32::from(self.dbi.global_stream) => StreamRole::GlobalSymbols,
             _ if index == u32::from(self.dbi.public_stream) => StreamRole::PublicSymbols,
             _ if index == u32::from(self.dbi.symbol_record_stream) => StreamRole::SymbolRecords,
             _ if name.is_some() => StreamRole::Named,
@@ -262,7 +265,7 @@ mod tests {
     fn lists_stream_roles_from_the_container_and_headers() {
         let named_index = 8;
         let info = fixtures::info_stream(20_000_404, &[("/names", named_index)]);
-        let dbi = fixtures::dbi_stream(5, 6);
+        let dbi = fixtures::dbi_stream(4, 5, 6);
         let bytes = fixtures::container(&[
             None,
             Some(info),
@@ -294,7 +297,7 @@ mod tests {
     #[test]
     fn an_unknown_pdb_version_is_a_structured_failure() {
         let info = fixtures::info_stream(20_140_508, &[]);
-        let dbi = fixtures::dbi_stream(3, 4);
+        let dbi = fixtures::dbi_stream(4, 3, 4);
         let bytes = fixtures::container(&[None, Some(info), None, Some(dbi), None]);
         let path = fixtures::write(&bytes, "unknown-version");
         let error = PdbFile::open(&path).expect_err("an unrecognized version must not produce a report");
@@ -307,7 +310,7 @@ mod tests {
     #[test]
     fn a_dbi_stream_number_past_the_container_is_rejected() {
         let info = fixtures::info_stream(20_000_404, &[]);
-        let dbi = fixtures::dbi_stream(99, 4);
+        let dbi = fixtures::dbi_stream(4, 99, 4);
         let bytes = fixtures::container(&[None, Some(info), None, Some(dbi), None]);
         let path = fixtures::write(&bytes, "public-stream-past-container");
         let error = PdbFile::open(&path).expect_err("a stream number outside the container must fail");
@@ -349,7 +352,10 @@ mod tests {
             info.named_streams().len()
         );
         let dbi = *pdb.dbi();
-        println!("dbi: age {}, public stream {}, symbol record stream {}", dbi.age, dbi.public_stream, dbi.symbol_record_stream);
+        println!(
+            "dbi: age {}, global stream {}, public stream {}, symbol record stream {}",
+            dbi.age, dbi.global_stream, dbi.public_stream, dbi.symbol_record_stream
+        );
 
         let streams = pdb.streams();
         for entry in &streams {
@@ -363,6 +369,7 @@ mod tests {
         }
 
         assert_eq!(streams.len(), pdb.stream_count());
+        assert_eq!(streams.iter().filter(|entry| entry.role == StreamRole::GlobalSymbols).count(), 1);
         assert_eq!(streams.iter().filter(|entry| entry.role == StreamRole::PublicSymbols).count(), 1);
         assert_eq!(streams.iter().filter(|entry| entry.role == StreamRole::SymbolRecords).count(), 1);
         let public = streams.iter().find(|entry| entry.role == StreamRole::PublicSymbols).expect("public symbol stream");

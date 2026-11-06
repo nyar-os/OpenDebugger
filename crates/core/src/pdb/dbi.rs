@@ -1,4 +1,4 @@
-//! DBI stream header: the stream numbers that hold public symbols and symbol records.
+//! DBI stream header: the stream numbers that hold the symbol hash tables and symbol records.
 //!
 //! Only the fixed header is read. Module information, section contributions, type server maps
 //! and the optional debug header follow it and belong to later stages, so their sizes are
@@ -15,12 +15,15 @@ const SIGNATURE: u32 = 0xFFFF_FFFF;
 const VERSION_HEADER: u32 = 19_990_903;
 
 const AGE_OFFSET: usize = 0x08;
+const GLOBAL_STREAM_OFFSET: usize = 0x0C;
 const PUBLIC_STREAM_OFFSET: usize = 0x10;
 const SYMBOL_RECORD_STREAM_OFFSET: usize = 0x14;
 
 #[derive(Debug, Clone, Copy)]
 pub struct DbiHeader {
     pub age: u32,
+    /// Stream holding the global symbol hash table.
+    pub global_stream: u16,
     /// Stream holding the public symbol hash table.
     pub public_stream: u16,
     /// Stream holding the symbol records the hash tables index into.
@@ -46,9 +49,10 @@ pub fn parse_header(bytes: &[u8]) -> Result<DbiHeader, PdbError> {
         ));
     }
     let age = word(bytes, AGE_OFFSET).ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, "DBI header is truncated"))?;
+    let global_stream = half(bytes, GLOBAL_STREAM_OFFSET).ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, "DBI header is truncated"))?;
     let public_stream = half(bytes, PUBLIC_STREAM_OFFSET).ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, "DBI header is truncated"))?;
     let symbol_record_stream = half(bytes, SYMBOL_RECORD_STREAM_OFFSET).ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, "DBI header is truncated"))?;
-    Ok(DbiHeader { age, public_stream, symbol_record_stream })
+    Ok(DbiHeader { age, global_stream, public_stream, symbol_record_stream })
 }
 
 #[cfg(test)]
@@ -57,17 +61,18 @@ mod tests {
     use crate::pdb::fixtures;
 
     #[test]
-    fn reads_the_public_and_symbol_record_stream_numbers() {
-        let bytes = fixtures::dbi_stream(5, 6);
+    fn reads_the_symbol_stream_numbers() {
+        let bytes = fixtures::dbi_stream(4, 5, 6);
         let header = parse_header(&bytes).expect("the synthetic DBI header is valid");
         assert_eq!(header.age, 1);
+        assert_eq!(header.global_stream, 4);
         assert_eq!(header.public_stream, 5);
         assert_eq!(header.symbol_record_stream, 6);
     }
 
     #[test]
     fn an_unknown_version_stamp_is_a_structured_failure() {
-        let mut bytes = fixtures::dbi_stream(5, 6);
+        let mut bytes = fixtures::dbi_stream(4, 5, 6);
         bytes[4..8].copy_from_slice(&0u32.to_le_bytes());
         let error = parse_header(&bytes).expect_err("an unrecognized stamp must not be treated as a DBI header");
         assert_eq!(error.kind(), PdbErrorKind::UnknownStreamConvention);
