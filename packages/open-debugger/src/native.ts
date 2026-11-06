@@ -39,6 +39,21 @@ export type StackFrame = {
     source: StackFrameSource;
 };
 
+/** Milliseconds spent in each analysis phase for this exact run. */
+export type AnalysisTimings = {
+    /** Header fields and the faulting context. */
+    header: number;
+    /** Module record table scan. */
+    moduleTable: number;
+    /** Captured memory block table scan. */
+    blockTable: number;
+    /** Stack read, frame scan and call-site checks. */
+    stack: number;
+    /** Image and PDB lookup plus `dbghelp` symbol resolution. */
+    symbols: number;
+    total: number;
+};
+
 /** A loaded module whose base address appears as a word on the crash stack. */
 export type StackReference = {
     address: string;
@@ -123,6 +138,8 @@ export type DumpReport = {
     stackModuleBases: StackReference[];
     /** Symbol store state, including modules whose image or PDB is missing. */
     symbols: SymbolDiagnostics;
+    /** Phase durations for this exact run. */
+    timings: AnalysisTimings;
     physicalPage?: PhysicalPage | null;
     processId?: number;
     warnings: string[];

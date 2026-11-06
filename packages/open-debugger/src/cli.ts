@@ -79,7 +79,7 @@ function describeParameter(value: string, label: string | undefined, note: strin
     return detail ? `${value} (${detail})` : value;
 }
 
-function printDumpReport(report: DumpReport, limit: number): void {
+function printDumpReport(report: DumpReport, limit: number, timings = false): void {
     console.log(`format: ${report.format}`);
     if (report.dumpType) console.log(`dump type: ${report.dumpType}`);
     console.log(`size: ${formatBytes(report.sizeBytes)}`);
@@ -159,6 +159,11 @@ function printDumpReport(report: DumpReport, limit: number): void {
         console.log(`physical page: PFN 0x${page.pfn.toString(16).toUpperCase()} at ${entry} (${mapped}${raw})`);
     }
     for (const warning of report.warnings) console.log(`warning: ${warning}`);
+    if (timings) {
+        const phases = ['header', 'moduleTable', 'blockTable', 'stack', 'symbols', 'total'] as const;
+        const values = phases.map((phase) => `${phase} ${report.timings[phase].toFixed(2)} ms`);
+        console.log(`timings: ${values.join(', ')}`);
+    }
 }
 
 function printBugcheck(info: BugcheckInfo): void {
@@ -200,11 +205,12 @@ const limitOption = {
 cli.command('analyze', 'cli.cmd.analyze')
     .option('--json', 'cli.opt.json')
     .option('--limit <n>', 'cli.opt.limit', limitOption)
+    .option('--timings', 'cli.opt.timings')
     .actionCtx(async (options, args) => {
         applyActor(options);
         const dump = args[0];
         if (!dump) {
-            console.error('usage: open-debugger analyze <dump> [--json] [--limit <n>]');
+            console.error('usage: open-debugger analyze <dump> [--json] [--limit <n>] [--timings]');
             return EXIT_USAGE;
         }
         const limitRaw = text(options, 'limit');
@@ -212,7 +218,7 @@ cli.command('analyze', 'cli.cmd.analyze')
         try {
             const report = analyzeDump({ path: dump });
             if (options.json === true) console.log(JSON.stringify(report, null, 2));
-            else printDumpReport(report, limit);
+            else printDumpReport(report, limit, options.timings === true);
             return EXIT_OK;
         }
         catch (error) {

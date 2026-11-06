@@ -4,6 +4,7 @@ import {
     type AuditConfigureOptions,
     type AuditQueryOptions,
     type AuditRecord,
+    type AnalysisTimings,
     type BugcheckInfo,
     type Capabilities,
     type CrashGroup,
@@ -15,6 +16,7 @@ import {
 
 export type {
     ActorKind,
+    AnalysisTimings,
     AuditActor,
     AuditConfigureOptions,
     AuditQueryOptions,

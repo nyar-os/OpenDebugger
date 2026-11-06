@@ -14,6 +14,7 @@
         "opt": {
             "json": "Print machine-readable JSON",
             "limit": "Max modules to print in human output",
+            "timings": "Print the milliseconds spent in each analysis phase",
             "auditLimit": "Max audit records to print",
             "out": "Report file path written by `report`",
             "dryRun": "Validate the request and print the intended write without touching the filesystem",
