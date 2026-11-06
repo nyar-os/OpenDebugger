@@ -72,6 +72,7 @@ pub(crate) fn function_names(modules: &[KernelModule], addresses: &[u64]) -> (Ve
 mod windows {
     use std::{
         ffi::c_void,
+        io::{Read, Seek, SeekFrom},
         path::{Path, PathBuf},
         sync::Mutex,
     };
@@ -98,6 +99,9 @@ mod windows {
     const SECTION_HEADER_SIZE: usize = 40;
     const CODEVIEW_ENTRY: u32 = 2;
     const MAX_PDB_PATH_BYTES: usize = 260;
+    /// Bounds on the header region a real PE32+ image can occupy.
+    const MAX_OPTIONAL_HEADER: usize = 0x1000;
+    const MAX_SECTIONS: usize = 96;
 
     static SERIALIZE: Mutex<()> = Mutex::new(());
 
@@ -421,55 +425,71 @@ mod windows {
 
     /// Reads the RSDS CodeView record of a PE image.
     ///
-    /// Returns `None` for anything this module does not understand: a missing DOS or PE header,
-    /// a non-PE32+ optional header, a absent debug directory, or a CodeView record without the
-    /// `RSDS` signature. The PDB name is taken from the file part of the recorded path, because
-    /// the build machine path does not exist on the analysis host.
+    /// Only the headers, the section table, the debug directory entry and the RSDS record are
+    /// read, so an eleven megabyte image costs a few kilobytes instead of a full copy. Returns
+    /// `None` for anything this module does not understand: a missing DOS or PE header, a non
+    /// PE32+ optional header, an absent debug directory, or a CodeView record without the `RSDS`
+    /// signature. The PDB name is taken from the file part of the recorded path, because the
+    /// build machine path does not exist on the analysis host.
     fn code_view(image: &Path) -> Option<CodeView> {
-        let bytes = std::fs::read(image).ok()?;
-        let pe = usize::try_from(read_u32(&bytes, 0x3C)?).ok()?;
-        if bytes.get(pe..pe + 4)? != b"PE\0\0".as_slice() || read_u16(&bytes, pe + 24)? != PE32_PLUS {
+        let mut file = std::fs::File::open(image).ok()?;
+        let dos = read_at(&mut file, 0, 0x40)?;
+        let pe = u64::from(read_u32(&dos, 0x3C)?);
+        let coff = read_at(&mut file, pe, 24)?;
+        if coff.get(0..4)? != b"PE\0\0".as_slice() {
             return None;
         }
-        let sections = usize::from(read_u16(&bytes, pe + 6)?);
-        let optional_size = usize::from(read_u16(&bytes, pe + 20)?);
-        let section_table = pe + 24 + optional_size;
-        let directory = pe + 24 + DATA_DIRECTORY_OFFSET + DEBUG_DIRECTORY_INDEX * 8;
-        let debug_rva = read_u32(&bytes, directory)?;
-        let debug_size = read_u32(&bytes, directory + 4)?;
+        let sections = usize::from(read_u16(&coff, 6)?);
+        let optional_size = usize::from(read_u16(&coff, 20)?);
+        if !(2..=MAX_OPTIONAL_HEADER).contains(&optional_size) || !(1..=MAX_SECTIONS).contains(&sections) {
+            return None;
+        }
+        let optional = read_at(&mut file, pe + 24, optional_size)?;
+        if read_u16(&optional, 0)? != PE32_PLUS {
+            return None;
+        }
+        let directory = DATA_DIRECTORY_OFFSET + DEBUG_DIRECTORY_INDEX * 8;
+        let debug_rva = read_u32(&optional, directory)?;
+        let debug_size = read_u32(&optional, directory + 4)?;
         if debug_rva == 0 || debug_size < DEBUG_ENTRY_SIZE as u32 {
             return None;
         }
-        let start = section_offset(&bytes, section_table, sections, debug_rva)?;
+        let section_table = read_at(&mut file, pe + 24 + optional_size as u64, sections * SECTION_HEADER_SIZE)?;
+        let start = section_offset(&section_table, sections, debug_rva)?;
         for index in 0..usize::try_from(debug_size / DEBUG_ENTRY_SIZE as u32).ok()? {
-            let entry = start + index * DEBUG_ENTRY_SIZE;
-            if read_u32(&bytes, entry + 12)? != CODEVIEW_ENTRY {
+            let entry = read_at(&mut file, (start + index * DEBUG_ENTRY_SIZE) as u64, DEBUG_ENTRY_SIZE)?;
+            if read_u32(&entry, 12)? != CODEVIEW_ENTRY {
                 continue;
             }
-            let size = read_u32(&bytes, entry + 16)?;
-            let pointer = read_u32(&bytes, entry + 24)?;
-            let data = if pointer == 0 {
-                section_offset(&bytes, section_table, sections, read_u32(&bytes, entry + 20)?)?
-            }
-            else {
-                usize::try_from(pointer).ok()?
-            };
-            if size < DEBUG_ENTRY_SIZE as u32 || bytes.get(data..data + 4)? != b"RSDS".as_slice() {
+            let size = read_u32(&entry, 16)?;
+            let pointer = read_u32(&entry, 24)?;
+            let data =
+                if pointer == 0 { section_offset(&section_table, sections, read_u32(&entry, 20)?)? } else { usize::try_from(pointer).ok()? };
+            if size < 24 || read_at(&mut file, data as u64, 4)? != b"RSDS".as_slice() {
                 continue;
             }
-            let guid = bytes.get(data + 4..data + 20)?;
-            let age = read_u32(&bytes, data + 20)?;
-            let name_start = data + 24;
-            let terminator = bytes.get(name_start..)?.iter().position(|byte| *byte == 0)?;
-            if terminator > MAX_PDB_PATH_BYTES {
-                return None;
-            }
-            let path = std::str::from_utf8(bytes.get(name_start..name_start + terminator)?).ok()?;
+            let record = read_at(&mut file, data as u64 + 4, 20)?;
+            let guid = record.get(0..16)?;
+            let age = read_u32(&record, 16)?;
+            let name_offset = data as u64 + 24;
+            let length = usize::try_from(file.metadata().ok()?.len().checked_sub(name_offset)?).ok()?.min(MAX_PDB_PATH_BYTES + 1);
+            let name = read_at(&mut file, name_offset, length)?;
+            let terminator = name.iter().position(|byte| *byte == 0)?;
+            let path = std::str::from_utf8(name.get(..terminator)?).ok()?;
             let pdb_name = Path::new(path).file_name()?.to_string_lossy().into_owned();
             let key = store_key(guid, age);
             return Some(CodeView { pdb_name, key });
         }
         None
+    }
+
+    /// Reads exactly `length` bytes at `offset`, so a malformed header cannot make the caller
+    /// believe it owns more data than the file holds.
+    fn read_at(file: &mut std::fs::File, offset: u64, length: usize) -> Option<Vec<u8>> {
+        let mut buffer = vec![0u8; length];
+        file.seek(SeekFrom::Start(offset)).ok()?;
+        file.read_exact(&mut buffer).ok()?;
+        Some(buffer)
     }
 
     /// Builds the `<GUID><age>` symbol store key from the raw CodeView GUID.
@@ -485,13 +505,13 @@ mod windows {
         format!("{first:08X}{second:04X}{third:04X}{tail}{age}")
     }
 
-    fn section_offset(bytes: &[u8], table: usize, count: usize, rva: u32) -> Option<usize> {
+    fn section_offset(section_table: &[u8], count: usize, rva: u32) -> Option<usize> {
         for index in 0..count {
-            let section = table + index * SECTION_HEADER_SIZE;
-            let virtual_size = read_u32(bytes, section + 8)?;
-            let virtual_address = read_u32(bytes, section + 12)?;
-            let raw_size = read_u32(bytes, section + 16)?;
-            let raw_offset = read_u32(bytes, section + 20)?;
+            let section = index * SECTION_HEADER_SIZE;
+            let virtual_size = read_u32(section_table, section + 8)?;
+            let virtual_address = read_u32(section_table, section + 12)?;
+            let raw_size = read_u32(section_table, section + 16)?;
+            let raw_offset = read_u32(section_table, section + 20)?;
             let span = virtual_size.max(raw_size);
             if rva >= virtual_address && rva - virtual_address < span {
                 let delta = usize::try_from(rva - virtual_address).ok()?;
