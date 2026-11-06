@@ -31,6 +31,11 @@ asks why the machine bugchecked.
   candidates and never name them as the cause. A frame without `function` is
   not a missing report field to invent: its module image or PDB is absent from
   the local store.
+- `symbols.missing` lists every module that could not be named, with its
+  `reason`, the expected `imagePath` and `pdbPath`, the PDB `pdbName` and
+  `<GUID><age>` `pdbKey`, and a `fetchCommand`. Report those fields to the user
+  and run the `symchk` command only after they agree to populate a local store
+  with a symbol server.
 - `stackModuleBases` lists image references that appear as words on the crash
   stack. They show what was being handled, not what failed.
 - A minidump normally has no `bugcheck` field. Kernel dumps carry the code and

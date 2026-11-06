@@ -270,8 +270,12 @@ fn read_module_name(input: &Input, offset: u64) -> Option<String> {
 ///
 /// The third value lists stack words that equal a loaded module's base address. Those are
 /// image references passed as arguments, which is evidence a driver was being handled, not proof
-/// that it caused the bugcheck.
-pub(crate) fn stack_frames(input: &Input, triage: &mut Triage) -> (Vec<StackFrame>, Vec<StackFrame>, Vec<StackReference>) {
+/// that it caused the bugcheck. The fourth value reports the symbol store state, naming every
+/// module whose image or PDB is missing and the command that prefetches it.
+pub(crate) fn stack_frames(
+    input: &Input,
+    triage: &mut Triage,
+) -> (Vec<StackFrame>, Vec<StackFrame>, Vec<StackReference>, crate::symbols::SymbolDiagnostics) {
     let mut trusted: Vec<(u64, u64, StackFrame)> =
         vec![(triage.context_rsp, triage.context_rip, describe_frame(triage.context_rip, &triage.modules, StackFrameSource::Context))];
     let mut guesses: Vec<(u64, u64, StackFrame)> = Vec::new();
@@ -369,8 +373,8 @@ pub(crate) fn stack_frames(input: &Input, triage: &mut Triage) -> (Vec<StackFram
             names.join(", ")
         ));
     }
-    let (symbols, warnings) = crate::symbols::function_names(&triage.modules, &addresses);
-    triage.warnings.extend(warnings);
+    let (symbols, diagnostics) = crate::symbols::function_names(&triage.modules, &addresses);
+    triage.warnings.extend(diagnostics.warnings.iter().cloned());
     let trusted_count = frames.len();
     for (index, frame) in frames.iter_mut().enumerate() {
         apply_symbol(frame, symbols.get(index).and_then(|symbol| symbol.as_ref()));
@@ -379,7 +383,7 @@ pub(crate) fn stack_frames(input: &Input, triage: &mut Triage) -> (Vec<StackFram
     for (offset, frame) in separate_guesses.iter_mut().enumerate() {
         apply_symbol(frame, symbols.get(trusted_count + offset).and_then(|symbol| symbol.as_ref()));
     }
-    (frames, separate_guesses, references)
+    (frames, separate_guesses, references, diagnostics)
 }
 
 /// Resolves one stack word into a frame.

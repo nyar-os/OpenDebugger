@@ -77,10 +77,11 @@ debugger uses, from a local symbol store. The store is `OPEN_DEBUGGER_SYMBOL_STO
 set, otherwise the Windows Kits debugger `sym` directory. A triage dump contains no module
 binaries, so the store must hold the module image and its PDB for the exact timestamp and
 size recorded in the dump; a frame whose module is missing keeps its `MODULE+offset` form
-and the report says which module is missing. This binding never downloads symbols: on a
-clean machine populate the store first with the Debugging Tools and
+and `report.symbols` names the module, the image path, the PDB name and its `<GUID><age>`
+key, plus a `symchk` command that prefetches both. This binding never downloads symbols
+itself: on a clean machine run that command with the Debugging Tools and
 `srv*https://msdl.microsoft.com/download/symbols`, then point `OPEN_DEBUGGER_SYMBOL_STORE`
-at that directory.
+at the resulting directory.
 
 ## License
 

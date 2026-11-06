@@ -69,6 +69,7 @@ mod tests {
             stack: Vec::new(),
             stack_guesses: Vec::new(),
             stack_module_bases: Vec::new(),
+            symbols: Default::default(),
             physical_page: None,
             process_id: None,
             warnings: vec!["synthetic".into()],

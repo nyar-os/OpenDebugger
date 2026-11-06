@@ -45,6 +45,34 @@ export type StackReference = {
     module: string;
 };
 
+/** A module whose image or PDB could not be used to name its frames. */
+export type MissingSymbol = {
+    module: string;
+    timestamp: number;
+    size: number;
+    /** Why the module could not be named. */
+    reason: string;
+    /** Store path for the image, or the path the image must occupy. */
+    imagePath?: string;
+    /** PDB name recorded by the module image. */
+    pdbName?: string;
+    /** `<GUID><age>` key that names the PDB directory in the symbol store. */
+    pdbKey?: string;
+    pdbPath?: string;
+    /** Command that prefetches the image and PDB with Debugging Tools. */
+    fetchCommand?: string;
+};
+
+/** Symbol store state for one analysis. */
+export type SymbolDiagnostics = {
+    store?: string;
+    /** True when `dbghelp` was bound and accepted the store. */
+    engine: boolean;
+    /** Modules whose image or PDB is missing, each with a prefetch command when one can be formed. */
+    missing: MissingSymbol[];
+    warnings: string[];
+};
+
 /** A bugcheck page frame number and its `MMPFN` database entry. */
 export type PhysicalPage = {
     pfn: number;
@@ -93,6 +121,8 @@ export type DumpReport = {
     stackGuesses: StackFrame[];
     /** Module bases observed on the crash stack, deduplicated. */
     stackModuleBases: StackReference[];
+    /** Symbol store state, including modules whose image or PDB is missing. */
+    symbols: SymbolDiagnostics;
     physicalPage?: PhysicalPage | null;
     processId?: number;
     warnings: string[];

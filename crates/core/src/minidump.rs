@@ -6,6 +6,7 @@ use crate::{
     bugcheck::{lookup_bugcheck, parameter_labels, parameter_notes},
     error::{Error, Result},
     input::{self as byte_source, FileReader, Input},
+    symbols::SymbolDiagnostics,
     triage::{self},
 };
 
@@ -189,6 +190,8 @@ pub struct DumpReport {
     pub stack_guesses: Vec<StackFrame>,
     /// Module bases observed as words on the crash stack, deduplicated by module and address.
     pub stack_module_bases: Vec<StackReference>,
+    /// Symbol store state: the store in use and every module whose image or PDB is missing.
+    pub symbols: SymbolDiagnostics,
     /// Page frame number carried by a bugcheck parameter, with its PFN database entry.
     pub physical_page: Option<PhysicalPage>,
     pub process_id: Option<u32>,
@@ -210,6 +213,7 @@ impl DumpReport {
             stack: Vec::new(),
             stack_guesses: Vec::new(),
             stack_module_bases: Vec::new(),
+            symbols: SymbolDiagnostics::default(),
             physical_page: None,
             process_id: None,
             warnings: Vec::new(),
@@ -447,10 +451,11 @@ fn parse_kernel_dump(bytes: &Input) -> Result<DumpReport> {
         if report.modules.is_empty() {
             report.warnings.push("the triage dump did not expose a loadable module table".to_string());
         }
-        let (stack, stack_guesses, references) = triage::stack_frames(bytes, triage);
+        let (stack, stack_guesses, references, symbols) = triage::stack_frames(bytes, triage);
         report.stack = stack;
         report.stack_guesses = stack_guesses;
         report.stack_module_bases = references;
+        report.symbols = symbols;
         report.warnings.append(&mut triage.warnings);
     }
     else {
@@ -906,6 +911,21 @@ mod tests {
             report.stack.iter().all(|frame| frame.function.is_none()),
             "a synthetic module has no symbol store entry, so no frame may carry a function name"
         );
+        if cfg!(windows) {
+            let missing = report
+                .symbols
+                .missing
+                .iter()
+                .find(|entry| entry.module == "fake-1.sys")
+                .expect("a module that cannot be named must appear in the symbol diagnostics");
+            assert_eq!(missing.timestamp, report.modules[1].timestamp);
+            if report.symbols.store.is_some() {
+                assert!(
+                    missing.fetch_command.as_deref().is_some_and(|command| command.starts_with("symchk /r")),
+                    "a module image missing from the store must carry a prefetch command"
+                );
+            }
+        }
         assert!(!report.warnings.iter().any(|warning| warning.starts_with("not_implemented")));
     }
 

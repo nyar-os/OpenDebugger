@@ -140,6 +140,17 @@ function printDumpReport(report: DumpReport, limit: number): void {
         const references = report.stackModuleBases.map((entry) => `${entry.module} @ ${entry.address}`);
         console.log(`module bases on the stack: ${references.join(', ')}`);
     }
+    if (report.symbols.missing.length > 0) {
+        console.log(`missing symbols: ${report.symbols.missing.length} modules`);
+        for (const entry of report.symbols.missing.slice(0, limit)) {
+            const pdb = entry.pdbName ? `${entry.pdbName}${entry.pdbKey ? ` ${entry.pdbKey}` : ''}` : 'PDB identity unknown';
+            console.log(`  ${entry.module}  ${entry.reason}  (${pdb})`);
+            if (entry.imagePath) console.log(`    image: ${entry.imagePath}`);
+            if (entry.pdbPath) console.log(`    pdb: ${entry.pdbPath}`);
+            if (entry.fetchCommand) console.log(`    fetch: ${entry.fetchCommand}`);
+        }
+        if (report.symbols.missing.length > limit) console.log(`  ... ${report.symbols.missing.length - limit} more (use --limit or --json)`);
+    }
     if (report.physicalPage) {
         const page = report.physicalPage;
         const entry = page.databaseEntry ?? 'unknown entry';
