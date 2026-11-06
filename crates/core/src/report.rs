@@ -72,6 +72,7 @@ mod tests {
             symbols: Default::default(),
             physical_page: None,
             process_id: None,
+            timings: Default::default(),
             warnings: vec!["synthetic".into()],
         }
     }

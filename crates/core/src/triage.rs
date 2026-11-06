@@ -10,6 +10,7 @@ use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
     path::PathBuf,
+    time::Instant,
 };
 
 use crate::{
@@ -86,7 +87,22 @@ pub(crate) struct Triage {
     pub modules: Vec<KernelModule>,
     /// Captured virtual ranges, used to tell whether an address has content in this dump.
     pub blocks: Vec<TriageBlock>,
+    pub timings: TriageTimings,
     pub warnings: Vec<String>,
+}
+
+/// Milliseconds spent in each triage phase, for the `analyze --timings` breakdown.
+#[derive(Default)]
+pub(crate) struct TriageTimings {
+    pub header: f64,
+    pub module_table: f64,
+    pub block_table: f64,
+    pub stack: f64,
+    pub symbols: f64,
+}
+
+fn elapsed_ms(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
 }
 
 impl Triage {
@@ -103,6 +119,7 @@ impl Triage {
 
 /// Reads the triage header and returns the mapped stack block plus the loaded module table.
 pub(crate) fn parse(input: &Input) -> Option<Triage> {
+    let started = Instant::now();
     let context_offset = u64::from(read_u32(input, CONTEXT_OFFSET_FIELD)?);
     if context_offset >= input.len() {
         return None;
@@ -116,16 +133,21 @@ pub(crate) fn parse(input: &Input) -> Option<Triage> {
 
     let mut warnings = Vec::new();
     let stack_block = locate_stack_block(input, context_rsp, &mut warnings);
+    let mut timings = TriageTimings { header: elapsed_ms(started), ..TriageTimings::default() };
+    let started = Instant::now();
     let modules = locate_module_table(input, &mut warnings).unwrap_or_default();
+    timings.module_table = elapsed_ms(started);
+    let started = Instant::now();
     let mut blocks = locate_block_table(input, &mut warnings);
     if let Some(stack) = stack_block.as_ref()
         && !blocks.iter().any(|block| block.contains(stack.va))
     {
         blocks.push(TriageBlock { va: stack.va, file_offset: stack.file_offset, size: stack.size });
     }
+    timings.block_table = elapsed_ms(started);
     let pfn_database_base = read_u64(input, 0x18).filter(|value| *value >= KERNEL_BASE_MIN);
 
-    Some(Triage { context_rip, context_rsp, context_rbp, pfn_database_base, stack_block, modules, blocks, warnings })
+    Some(Triage { context_rip, context_rsp, context_rbp, pfn_database_base, stack_block, modules, blocks, timings, warnings })
 }
 
 /// Finds the descriptor that expands into the table of captured virtual ranges.
@@ -276,6 +298,7 @@ pub(crate) fn stack_frames(
     input: &Input,
     triage: &mut Triage,
 ) -> (Vec<StackFrame>, Vec<StackFrame>, Vec<StackReference>, crate::symbols::SymbolDiagnostics) {
+    let scan_started = Instant::now();
     let mut trusted: Vec<(u64, u64, StackFrame)> =
         vec![(triage.context_rsp, triage.context_rip, describe_frame(triage.context_rip, &triage.modules, StackFrameSource::Context))];
     let mut guesses: Vec<(u64, u64, StackFrame)> = Vec::new();
@@ -349,6 +372,7 @@ pub(crate) fn stack_frames(
     let separate_guesses: Vec<StackFrame> = guesses.into_iter().map(|(_, _, frame)| frame).collect();
     let mut addresses: Vec<u64> = frames.iter().filter_map(frame_address).collect();
     addresses.extend(separate_guesses.iter().filter_map(frame_address));
+    triage.timings.stack = elapsed_ms(scan_started);
 
     if skipped > 0 {
         triage
@@ -373,7 +397,9 @@ pub(crate) fn stack_frames(
             names.join(", ")
         ));
     }
+    let symbol_started = Instant::now();
     let (symbols, diagnostics) = crate::symbols::function_names(&triage.modules, &addresses);
+    triage.timings.symbols = elapsed_ms(symbol_started);
     triage.warnings.extend(diagnostics.warnings.iter().cloned());
     let trusted_count = frames.len();
     for (index, frame) in frames.iter_mut().enumerate() {

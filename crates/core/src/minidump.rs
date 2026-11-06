@@ -1,4 +1,4 @@
-use std::{cell::RefCell, path::Path};
+use std::{cell::RefCell, path::Path, time::Instant};
 
 use serde::Serialize;
 
@@ -170,6 +170,28 @@ pub struct BugcheckSummary {
     pub parameter_notes: Vec<Option<&'static str>>,
 }
 
+/// Milliseconds spent in each analysis phase.
+///
+/// These are measurements of the run that produced the report, not fixed costs: the file
+/// reader transfers only the ranges each phase asks for, so disk and symbol store state change
+/// the numbers between hosts.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisTimings {
+    /// Header fields and the faulting context.
+    pub header: f64,
+    /// Module record table scan.
+    pub module_table: f64,
+    /// Captured memory block table scan.
+    pub block_table: f64,
+    /// Stack block read, frame scan, frame-pointer chain and call-site checks.
+    pub stack: f64,
+    /// Image and PDB lookup plus `dbghelp` symbol resolution.
+    pub symbols: f64,
+    /// Whole `analyze` call for this dump.
+    pub total: f64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DumpReport {
@@ -195,6 +217,8 @@ pub struct DumpReport {
     /// Page frame number carried by a bugcheck parameter, with its PFN database entry.
     pub physical_page: Option<PhysicalPage>,
     pub process_id: Option<u32>,
+    /// Phase durations for this exact run.
+    pub timings: AnalysisTimings,
     pub warnings: Vec<String>,
 }
 
@@ -216,6 +240,7 @@ impl DumpReport {
             symbols: SymbolDiagnostics::default(),
             physical_page: None,
             process_id: None,
+            timings: AnalysisTimings::default(),
             warnings: Vec::new(),
         }
     }
@@ -246,12 +271,15 @@ pub fn analyze_bytes(bytes: &[u8]) -> Result<DumpReport> {
 }
 
 fn analyze_input(input: &Input) -> Result<DumpReport> {
+    let started = Instant::now();
     let signature = read_u32(input, 0).ok_or_else(|| Error::message("file is too small to contain a dump header"))?;
-    match signature {
+    let mut report = match signature {
         MINIDUMP_SIGNATURE => parse_minidump(input),
         PAGE_SIGNATURE => parse_kernel_dump(input),
         other => Err(Error::message(format!("unrecognized dump signature 0x{other:08X}; expected a Windows minidump or kernel dump"))),
-    }
+    }?;
+    report.timings.total = started.elapsed().as_secs_f64() * 1000.0;
+    Ok(report)
 }
 
 fn parse_minidump(bytes: &Input) -> Result<DumpReport> {
@@ -456,6 +484,11 @@ fn parse_kernel_dump(bytes: &Input) -> Result<DumpReport> {
         report.stack_guesses = stack_guesses;
         report.stack_module_bases = references;
         report.symbols = symbols;
+        report.timings.header = triage.timings.header;
+        report.timings.module_table = triage.timings.module_table;
+        report.timings.block_table = triage.timings.block_table;
+        report.timings.stack = triage.timings.stack;
+        report.timings.symbols = triage.timings.symbols;
         report.warnings.append(&mut triage.warnings);
     }
     else {
@@ -911,6 +944,13 @@ mod tests {
             report.stack.iter().all(|frame| frame.function.is_none()),
             "a synthetic module has no symbol store entry, so no frame may carry a function name"
         );
+        let timings = &report.timings;
+        assert!(timings.total > 0.0, "analyze records the wall time it spent");
+        assert!(
+            timings.header > 0.0 && timings.module_table > 0.0 && timings.block_table > 0.0 && timings.stack > 0.0 && timings.symbols > 0.0,
+            "every analysis phase is measured"
+        );
+        assert!(timings.total >= timings.stack + timings.symbols, "the total covers at least the stack and symbol phases");
         if cfg!(windows) {
             let missing = report
                 .symbols
