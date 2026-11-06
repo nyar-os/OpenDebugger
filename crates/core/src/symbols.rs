@@ -68,6 +68,15 @@ pub(crate) fn function_names(modules: &[KernelModule], addresses: &[u64]) -> (Ve
     }
 }
 
+/// Resolves `addresses` exactly as the PDB spells the names, without undecoration.
+///
+/// Only the conformance check uses this, so the pure PDB reader can be compared with the same
+/// spelling `dbghelp` reads from the file rather than with its normalized output.
+#[cfg(all(test, windows))]
+pub(crate) fn function_names_raw(modules: &[KernelModule], addresses: &[u64]) -> (Vec<Option<ResolvedSymbol>>, SymbolDiagnostics) {
+    windows::function_names_raw(modules, addresses)
+}
+
 #[cfg(windows)]
 mod windows {
     use std::{
@@ -160,6 +169,18 @@ mod windows {
     }
 
     pub(super) fn function_names(modules: &[KernelModule], addresses: &[u64]) -> (Vec<Option<ResolvedSymbol>>, SymbolDiagnostics) {
+        function_names_with(modules, addresses, true)
+    }
+
+    /// Resolves names without `SYMOPT_UNDNAME`, so a comparison sees the spelling a PDB stores.
+    ///
+    /// This exists for the conformance check that compares the pure PDB reader with `dbghelp`.
+    #[cfg(test)]
+    pub(super) fn function_names_raw(modules: &[KernelModule], addresses: &[u64]) -> (Vec<Option<ResolvedSymbol>>, SymbolDiagnostics) {
+        function_names_with(modules, addresses, false)
+    }
+
+    fn function_names_with(modules: &[KernelModule], addresses: &[u64], undname: bool) -> (Vec<Option<ResolvedSymbol>>, SymbolDiagnostics) {
         let symbols = std::iter::repeat_with(|| None).take(addresses.len()).collect::<Vec<Option<ResolvedSymbol>>>();
         let _serialized = SERIALIZE.lock().unwrap_or_else(|poison| poison.into_inner());
 
@@ -186,7 +207,7 @@ mod windows {
                 },
             );
         };
-        if !engine.initialize() {
+        if !engine.initialize(undname) {
             return (
                 symbols,
                 SymbolDiagnostics {
@@ -250,10 +271,11 @@ mod windows {
             })
         }
 
-        fn initialize(&self) -> bool {
+        fn initialize(&self, undname: bool) -> bool {
             // SAFETY: `dbghelp` accepts any non-zero unique handle value and a null-terminated path.
             unsafe {
-                (self.set_options)(SYMOPT_UNDNAME | SYMOPT_NO_PROMPTS);
+                let options = if undname { SYMOPT_UNDNAME | SYMOPT_NO_PROMPTS } else { SYMOPT_NO_PROMPTS };
+                (self.set_options)(options);
                 (self.initialize)(PROCESS_HANDLE, wide(&self.store.to_string_lossy()).as_ptr(), 0) != 0
             }
         }
