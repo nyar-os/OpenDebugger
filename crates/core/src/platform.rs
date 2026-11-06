@@ -77,7 +77,7 @@ pub fn capabilities() -> Capabilities {
         "kernel module enumeration is implemented for Windows only"
     };
     let symbol_detail = if windows {
-        "function names need a `dbgeng` or `dbghelp` binding: the engine libraries, headers and a local symbol cache exist on this machine, but this crate does not call them yet"
+        "`dbghelp` is bound at runtime and names frames when `OPEN_DEBUGGER_SYMBOL_STORE` or the Windows Kits symbol directory holds the module image and PDB for the recorded timestamp and size, otherwise frames stay at `MODULE+offset`"
     }
     else {
         "the Windows debug engine is available on Windows only"
@@ -104,7 +104,12 @@ pub fn capabilities() -> Capabilities {
             blocked(CAP_KERNEL_MODULE_LIST, CapabilityState::UnsupportedPlatform, kernel_module_detail)
         },
         available(CAP_REPORT_WRITE, "report documents are written to a caller-supplied file path"),
-        blocked(CAP_SYMBOL_RESOLVE, windows_only, symbol_detail),
+        if windows {
+            available(CAP_SYMBOL_RESOLVE, symbol_detail)
+        }
+        else {
+            blocked(CAP_SYMBOL_RESOLVE, CapabilityState::UnsupportedPlatform, symbol_detail)
+        },
         blocked(CAP_STACK_UNWIND, windows_only, stack_detail),
         blocked(CAP_LIVE_ATTACH, windows_only, windows_only_detail),
     ];
@@ -165,15 +170,16 @@ mod tests {
     }
 
     #[test]
-    fn windows_only_capabilities_report_a_structured_code_off_windows() {
+    fn symbol_resolution_follows_the_host_platform() {
         let report = capabilities();
         let entry = report.entries.iter().find(|entry| entry.capability == CAP_SYMBOL_RESOLVE).expect("entry");
         if cfg!(windows) {
-            assert_eq!(entry.code, Some(CapabilityState::NotImplemented));
+            assert!(entry.available);
+            assert_eq!(entry.code, None);
         }
         else {
             assert_eq!(entry.code, Some(CapabilityState::UnsupportedPlatform));
+            assert!(!entry.available);
         }
-        assert!(!entry.available);
     }
 }

@@ -52,7 +52,7 @@ Capabilities are reported as available, or blocked with one of `unsupported_plat
 | `kernel-module-list` | available on Windows, `unsupported_platform` elsewhere |
 | `report-write` | available |
 | `gui` | available on Windows |
-| `symbol-resolve` | `not_implemented` on Windows, `unsupported_platform` elsewhere |
+| `symbol-resolve` | available on Windows when a local symbol store holds the module image and PDB, `unsupported_platform` elsewhere |
 | `stack-unwind` | `not_implemented` on Windows, `unsupported_platform` elsewhere |
 | `live-attach` | `not_implemented` on Windows, `unsupported_platform` elsewhere |
 
@@ -68,10 +68,15 @@ module table, the crash stack block and the faulting context, and stack frames a
 as `MODULE+offset` with their source marked as `context`, `call-site` or `scan`. A triage
 dump carries no unwind metadata, so frames are not a metadata-driven unwind.
 
-Function names need a `dbgeng` or `dbghelp` binding, which this crate does not call yet.
-The engine libraries, headers and a local symbol cache exist on a machine with Windows
-Debugging Tools installed, and `cdb` there resolves the same dump, but the local cache and
-the network availability of `msdl` are outside this tool's contract.
+Function names come from `dbghelp.dll`, bound at runtime through the same export names a
+debugger uses, from a local symbol store. The store is `OPEN_DEBUGGER_SYMBOL_STORE` when
+set, otherwise the Windows Kits debugger `sym` directory. A triage dump contains no module
+binaries, so the store must hold the module image and its PDB for the exact timestamp and
+size recorded in the dump; a frame whose module is missing keeps its `MODULE+offset` form
+and the report says which module is missing. This binding never downloads symbols: on a
+clean machine populate the store first with the Debugging Tools and
+`srv*https://msdl.microsoft.com/download/symbols`, then point `OPEN_DEBUGGER_SYMBOL_STORE`
+at that directory.
 
 ## License
 

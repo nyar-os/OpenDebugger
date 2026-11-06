@@ -49,7 +49,7 @@ pub(crate) struct KernelModule {
 }
 
 impl KernelModule {
-    fn contains(&self, address: u64) -> Option<u64> {
+    pub(crate) fn contains(&self, address: u64) -> Option<u64> {
         let span = u64::from(self.size);
         if address >= self.base && address < self.base + span { Some(address - self.base) } else { None }
     }
@@ -263,9 +263,11 @@ fn read_module_name(input: &Input, offset: u64) -> Option<String> {
 /// that it caused the bugcheck.
 pub(crate) fn stack_frames(input: &Input, triage: &mut Triage) -> (Vec<StackFrame>, Vec<StackReference>) {
     let mut frames = vec![describe_frame(triage.context_rip, &triage.modules, StackFrameSource::Context)];
+    let mut addresses = vec![triage.context_rip];
     let mut references = Vec::new();
     let Some(block) = &triage.stack_block
     else {
+        resolve_symbols(&mut frames, &addresses, triage);
         return (frames, references);
     };
     let block_offset = block.file_offset;
@@ -307,12 +309,14 @@ pub(crate) fn stack_frames(input: &Input, triage: &mut Triage) -> (Vec<StackFram
                 continue;
             }
             frames.push(frame(address, &triage.modules[module_index], offset, StackFrameSource::CallSite));
+            addresses.push(address);
         }
         else {
             if !unavailable.contains(&module_index) {
                 unavailable.push(module_index);
             }
             frames.push(frame(address, &triage.modules[module_index], offset, StackFrameSource::Scan));
+            addresses.push(address);
         }
     }
 
@@ -328,13 +332,33 @@ pub(crate) fn stack_frames(input: &Input, triage: &mut Triage) -> (Vec<StackFram
             names.join(", ")
         ));
     }
+    resolve_symbols(&mut frames, &addresses, triage);
     (frames, references)
+}
+
+/// Asks the symbol engine to name each frame and appends its warnings to the triage report.
+fn resolve_symbols(frames: &mut [StackFrame], addresses: &[u64], triage: &mut Triage) {
+    let (symbols, warnings) = crate::symbols::function_names(&triage.modules, addresses);
+    triage.warnings.extend(warnings);
+    for (frame, symbol) in frames.iter_mut().zip(symbols) {
+        if let Some(symbol) = symbol {
+            frame.function = Some(symbol.function);
+            frame.function_offset = Some(format!("0x{:X}", symbol.displacement));
+        }
+    }
 }
 
 fn describe_frame(address: u64, modules: &[KernelModule], source: StackFrameSource) -> StackFrame {
     match resolve_module(modules, address) {
         Some((index, offset)) => frame(address, &modules[index], offset, source),
-        None => StackFrame { address: format!("0x{address:016X}"), module: None, offset_in_module: None, source },
+        None => StackFrame {
+            address: format!("0x{address:016X}"),
+            module: None,
+            offset_in_module: None,
+            function: None,
+            function_offset: None,
+            source,
+        },
     }
 }
 
@@ -343,6 +367,8 @@ fn frame(address: u64, module: &KernelModule, offset: u64, source: StackFrameSou
         address: format!("0x{address:016X}"),
         module: Some(module.name.clone()),
         offset_in_module: Some(format!("0x{offset:X}")),
+        function: None,
+        function_offset: None,
         source,
     }
 }

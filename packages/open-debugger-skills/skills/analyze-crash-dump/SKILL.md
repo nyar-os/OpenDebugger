@@ -20,12 +20,15 @@ asks why the machine bugchecked.
 - `dump-parse`, `kernel-dump`, `bugcheck-lookup` and `module-list` are portable
   and report `available: true` on every build target. `kernel-module-list` is
   available on Windows only.
-- `symbol-resolve`, `stack-unwind` and `live-attach` report `not_implemented`
-  on Windows and `unsupported_platform` elsewhere. Function names need a
-  `dbgeng` or `dbghelp` binding, which the core crate does not call.
+- `symbol-resolve` is available on Windows when a local symbol store, set
+  through `OPEN_DEBUGGER_SYMBOL_STORE` or the Windows Kits debugger `sym`
+  directory, holds the module image and PDB for the recorded timestamp and
+  size. Frames then carry `function` and `functionOffset`. `stack-unwind` and
+  `live-attach` still report `not_implemented`.
 - A kernel triage dump reports frames as `MODULE+offset` with a `source` of
   `context`, `call-site` or `scan`. Treat a `scan` frame as unverified and do
-  not name it as the cause.
+  not name it as the cause. A frame without `function` is not a missing report
+  field to invent: its module image or PDB is absent from the local store.
 - `stackModuleBases` lists image references that appear as words on the crash
   stack. They show what was being handled, not what failed.
 - A minidump normally has no `bugcheck` field. Kernel dumps carry the code and

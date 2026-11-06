@@ -115,8 +115,10 @@ function printDumpReport(report: DumpReport, limit: number): void {
     if (report.stack.length > 0) {
         console.log(`stack: ${report.stack.length} frames`);
         for (const frame of report.stack.slice(0, limit)) {
+            const offset = frame.offsetInModule ? `+${frame.offsetInModule}` : '';
+            const name = frame.function ? `${frame.function}${frame.functionOffset ? `+${frame.functionOffset}` : ''}` : undefined;
             const place = frame.module
-                ? `${frame.module}${frame.offsetInModule ? `+${frame.offsetInModule}` : ''}`
+                ? `${frame.module}${offset}${name ? `  ${name}` : ''}`
                 : 'unresolved';
             console.log(`  ${frame.address}  ${place}  (${frame.source})`);
         }

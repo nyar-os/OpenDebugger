@@ -109,6 +109,12 @@ pub struct StackFrame {
     pub module: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset_in_module: Option<String>,
+    /// Function that contains the address, present only when a local symbol store resolved it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function: Option<String>,
+    /// Offset from the resolved function start, present only with `function`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function_offset: Option<String>,
     pub source: StackFrameSource,
 }
 
@@ -460,9 +466,6 @@ fn parse_kernel_dump(bytes: &Input) -> Result<DumpReport> {
         }
     }
     report.warnings.push("a triage dump carries only the faulting context, so per-thread enumeration is unavailable".to_string());
-    report.warnings.push(
-        "frames report module and offset only: function names require a debug engine and a PDB whose timestamp matches the module".to_string(),
-    );
     Ok(report)
 }
 
@@ -890,6 +893,10 @@ mod tests {
         assert_eq!(page.database_entry.as_deref(), Some("0xFFFFD580296B8270"));
         assert!(page.in_dump);
         assert_eq!(page.entry_bytes.as_deref().map(str::len), Some(64));
+        assert!(
+            report.stack.iter().all(|frame| frame.function.is_none()),
+            "a synthetic module has no symbol store entry, so no frame may carry a function name"
+        );
         assert!(!report.warnings.iter().any(|warning| warning.starts_with("not_implemented")));
     }
 

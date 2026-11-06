@@ -1,8 +1,9 @@
 //! OpenDebugger domain: Windows crash dump analysis without GUI or platform bindings.
 //!
 //! The crate owns dump container parsing, the built-in bugcheck table, kernel triage block and
-//! module-table reads, and capability reporting. Symbol resolution and stack unwinding through
-//! unwind metadata still require a Windows debug engine, which this crate does not bind.
+//! module-table reads, `dbghelp`-bound function names for resolved frames, and capability
+//! reporting. Stack unwinding through unwind metadata is not attempted: a triage dump carries
+//! none, so frames come from the faulting context and verified call sites.
 
 pub mod bugcheck;
 pub mod error;
@@ -10,6 +11,7 @@ mod input;
 pub mod minidump;
 pub mod platform;
 pub mod report;
+mod symbols;
 mod triage;
 
 pub use bugcheck::{BugcheckInfo, lookup_bugcheck, parse_code};

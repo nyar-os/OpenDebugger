@@ -60,7 +60,7 @@ and `zh-CN`.
 | `kernel-module-list` | available |
 | `report-write` | available |
 | `gui` | available |
-| `symbol-resolve` | `not_implemented` |
+| `symbol-resolve` | available when a local symbol store holds the module image and PDB |
 | `stack-unwind` | `not_implemented` |
 | `live-attach` | `not_implemented` |
 
@@ -75,8 +75,10 @@ attach is not implemented yet on any platform.
 
 Kernel triage dumps resolve loaded modules and stack frames to `MODULE+offset`. Frames
 carry a `source` of `context`, `call-site` or `scan` because a triage dump has no unwind
-metadata. Function names need a `dbgeng` or `dbghelp` binding that the core crate does not
-call yet.
+metadata. Function names are added from `dbghelp` when a local symbol store, set through
+`OPEN_DEBUGGER_SYMBOL_STORE` or the Windows Kits debugger `sym` directory, holds the module
+image and PDB for the recorded timestamp and size. Uncached modules keep the offset form
+and the report names the missing module.
 
 ## Agent skills
 

@@ -33,6 +33,9 @@ export type StackFrame = {
     address: string;
     module?: string;
     offsetInModule?: string;
+    /** Function that contains the address, present only when a local symbol store resolved it. */
+    function?: string;
+    functionOffset?: string;
     source: StackFrameSource;
 };
 
