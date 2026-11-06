@@ -48,8 +48,8 @@ jobs:
         run: npm install --global npm@11
       - name: Install
         run: pnpm install --frozen-lockfile
-      - name: Build native and TypeScript
-        run: pnpm run build:napi && pnpm run build:ts
+      - name: Build native, TypeScript and GUI
+        run: pnpm run build:napi && pnpm run build:ts && pnpm run build:ui
       - name: Publish packages to npm
         shell: bash
         run: pnpm exec nifty publish --access public --version="${RELEASE_TAG#v}"
