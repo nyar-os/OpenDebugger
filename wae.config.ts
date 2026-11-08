@@ -33,4 +33,5 @@ export default {
     ci: {
         workflows: ['check-rust.yml', 'check-typescript.yml'],
     },
+    window: { mode: 'single', secondLaunch: 'focus' },
 };
