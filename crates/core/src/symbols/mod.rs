@@ -14,6 +14,9 @@ use crate::triage::KernelModule;
 
 #[cfg(windows)]
 mod dbghelp;
+/// The portable reader. Only tests drive it until it replaces the binding above.
+#[cfg(all(test, windows))]
+mod from_pdb;
 mod store;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -79,6 +82,15 @@ pub(crate) fn function_names(modules: &[KernelModule], addresses: &[u64]) -> (Ve
 #[cfg(all(test, windows))]
 pub(crate) fn function_names_raw(modules: &[KernelModule], addresses: &[u64]) -> (Vec<Option<ResolvedSymbol>>, SymbolDiagnostics) {
     dbghelp::function_names_raw(modules, addresses)
+}
+
+/// Resolves `addresses` through the PDB reader alone, with no `dbghelp` binding.
+///
+/// Only the conformance check calls this, so the portable reader can be compared with the bound
+/// engine over the same addresses before it becomes the product path.
+#[cfg(all(test, windows))]
+pub(crate) fn function_names_from_pdb(modules: &[KernelModule], addresses: &[u64]) -> (Vec<Option<ResolvedSymbol>>, SymbolDiagnostics) {
+    from_pdb::function_names(modules, addresses)
 }
 
 /// The modules at least one address falls into, in order of first appearance.

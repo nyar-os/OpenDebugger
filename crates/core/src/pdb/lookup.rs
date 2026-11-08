@@ -20,6 +20,9 @@ pub struct FunctionEntry {
     pub name: String,
     pub rva: u32,
     pub section: u16,
+    /// Byte offset from the start of `section`, which is how a procedure record names the same
+    /// function and how its length is found.
+    pub offset: u32,
     /// `S_PUB32` flags: 1 code, 2 function, 4 data, 8 thunk, 16 absolute.
     pub flags: u32,
 }
@@ -63,7 +66,7 @@ impl FunctionIndex {
                     format!("`{}` at section {} offset 0x{:X} is past the 32-bit RVA space", symbol.name, symbol.section, symbol.offset),
                 ));
             };
-            entries.push(FunctionEntry { name: symbol.name.clone(), rva, section: symbol.section, flags: symbol.flags });
+            entries.push(FunctionEntry { name: symbol.name.clone(), rva, section: symbol.section, offset: symbol.offset, flags: symbol.flags });
         }
         if entries.is_empty() {
             return Err(PdbError::new(

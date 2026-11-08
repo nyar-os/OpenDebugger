@@ -499,3 +499,84 @@ fn shape(name: &str) -> String {
     let tail = name.rfind("@@").map(|at| &name[at + 2..]).unwrap_or(name);
     tail.chars().take(4).collect()
 }
+
+/// Compares the PDB reader with the runtime in use, over every frame of a real dump.
+///
+/// The report is produced by the bound engine today, so its frames are the behavior being
+/// replaced. Each frame is resolved a second time through the PDB reader, and every difference is
+/// printed by name: a frame that gains a name is a behavior change, not a non-regression, and a
+/// frame that loses one would be a regression that has to be understood before the switch.
+#[test]
+#[ignore = "requires OPEN_DEBUGGER_REAL_DUMP and a symbol store holding the matching image and PDB"]
+fn compares_the_pdb_reader_with_the_current_runtime_on_a_real_dump() {
+    let dump = std::env::var("OPEN_DEBUGGER_REAL_DUMP").expect("set OPEN_DEBUGGER_REAL_DUMP to a real dump");
+    let report = analyze_file(Path::new(&dump)).expect("analyze the real dump");
+    assert!(report.symbols.engine, "the current runtime must resolve names for a comparison, diagnostics: {:?}", report.symbols);
+
+    let frames = report.stack.iter().chain(report.stack_guesses.iter()).collect::<Vec<_>>();
+    let addresses = frames.iter().filter_map(|frame| parse_hex(&frame.address)).collect::<Vec<_>>();
+    assert_eq!(addresses.len(), frames.len(), "every reported frame carries a hexadecimal address");
+
+    let modules = report
+        .modules
+        .iter()
+        .filter_map(|module| {
+            let base = parse_hex(&module.base_address)?;
+            Some(crate::triage::KernelModule { name: module.name.clone(), base, size: module.size_bytes, timestamp: module.timestamp })
+        })
+        .collect::<Vec<_>>();
+    let (resolved, diagnostics) = symbols::function_names_from_pdb(&modules, &addresses);
+    println!("pdb reader diagnostics: store {:?}, engine {}, {} missing", diagnostics.store, diagnostics.engine, diagnostics.missing.len());
+    for missing in &diagnostics.missing {
+        println!("  missing {}: {}", missing.module, missing.reason);
+    }
+    for warning in &diagnostics.warnings {
+        println!("  warning: {warning}");
+    }
+
+    let mut identical = 0usize;
+    let mut unnamed = 0usize;
+    let mut gained = Vec::new();
+    let mut lost = Vec::new();
+    let mut different = Vec::new();
+    for (index, frame) in frames.iter().enumerate() {
+        let ours = resolved.get(index).and_then(|symbol| symbol.as_ref());
+        let label = format!("{} {}", frame.address, frame.module.as_deref().unwrap_or("<unattributed>"));
+        match (frame.function.as_deref(), ours) {
+            (None, None) => unnamed += 1,
+            (Some(_), None) => lost.push((label, frame.offset_in_module.clone(), frame.function.clone())),
+            (None, Some(symbol)) => gained.push((label, frame.offset_in_module.clone(), symbol.function.clone(), symbol.displacement)),
+            (Some(today), Some(symbol)) => {
+                let displacement = format!("0x{:X}", symbol.displacement);
+                if today == symbol.function && frame.function_offset.as_deref() == Some(displacement.as_str()) {
+                    identical += 1;
+                }
+                else {
+                    different.push((label, today.to_string(), frame.function_offset.clone(), symbol.function.clone(), displacement));
+                }
+            }
+        }
+    }
+
+    println!(
+        "\nframes {}: identical {identical}, unnamed by both {unnamed}, newly named {}, lost {}, differing {}",
+        frames.len(),
+        gained.len(),
+        lost.len(),
+        different.len()
+    );
+    println!("\nframes that gain a name under the PDB reader (a behavior change):");
+    for (label, offset, function, displacement) in &gained {
+        println!("  {label} at {} -> {} +0x{:X}", offset.as_deref().unwrap_or("<no offset>"), function, displacement);
+    }
+    println!("\nframes that would lose a name:");
+    for (label, offset, today) in &lost {
+        println!("  {label} at {} -> was {:?}", offset.as_deref().unwrap_or("<no offset>"), today.as_deref().unwrap_or("<none>"));
+    }
+    println!("\nframes named differently:");
+    for (label, today, today_offset, function, displacement) in &different {
+        println!("  {label}\n    dbghelp: {today} +{}\n    pdb:     {function} +{displacement}", today_offset.as_deref().unwrap_or("<none>"));
+    }
+
+    assert_eq!(diagnostics.missing.len(), 0, "every frame module must resolve, else the comparison is partial");
+}
