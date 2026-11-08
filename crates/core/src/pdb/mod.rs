@@ -2,9 +2,9 @@
 //!
 //! A kernel PDB is an MSF container of numbered streams. Function names come from the public
 //! symbol records, which carry a section number and an offset inside that section. This module
-//! reads only what a name lookup needs: the container, the PDB info stream and the DBI header
-//! fields that name the public symbol and symbol record streams. Type information, variables,
-//! source lines, the module list and section contributions are not read.
+//! reads the container, the PDB info stream, the DBI header fields that name the public symbol and
+//! symbol record streams, and the DBI module list, section contributions and section map. Type
+//! information, variables and source lines are not read.
 //!
 //! Every unrecognized container shape, PDB version or stream convention is a structured error
 //! carrying a stable code. No path returns an empty result to stand in for a format this code
@@ -25,7 +25,7 @@ mod conformance;
 #[cfg(test)]
 mod fixtures;
 
-pub use dbi::DbiHeader;
+pub use dbi::{DbiHeader, DebugInfo, ModuleInfo, ModulePlacement, SectionContribution, SectionMapEntry};
 pub use info::PdbInfo;
 pub use lookup::{FunctionEntry, FunctionHit, FunctionIndex};
 pub use msf::Msf;
@@ -231,6 +231,15 @@ impl PdbFile {
         publics::load(&public_stream, &records)
     }
 
+    /// Reads the module list, section contributions and section map the DBI stream declares.
+    ///
+    /// The module list is the link-time list of compiler object files, not the loader's module
+    /// table. Each contribution places one object file's byte range in one image section.
+    pub fn debug_info(&mut self) -> Result<DebugInfo, PdbError> {
+        let stream = self.read_stream(DBI_STREAM)?;
+        dbi::parse(&stream)
+    }
+
     fn role(&self, index: u32, has_stream: bool, name: Option<&str>) -> StreamRole {
         if !has_stream {
             return StreamRole::Nil;
@@ -286,6 +295,25 @@ mod tests {
         assert_eq!(entries[8].name.as_deref(), Some("/names"));
         assert_eq!(entries[5].size_bytes, Some(32));
         assert_eq!(entries[0].size_bytes, None);
+    }
+
+    #[test]
+    fn reads_the_debug_info_of_a_synthetic_container() {
+        let info = fixtures::info_stream(20_000_404, &[]);
+        let modules = [fixtures::FixtureModule { name: "unit.obj", object_name: "unit.obj", section: 1, offset: 0x20, size: 0x40 }];
+        let contributions = [(0u16, 1u16, 0x20i32, 0x40i32)];
+        let sections = [(1u16, 0u32, 0x200u32)];
+        let dbi = fixtures::dbi_stream_with_debug_info(&modules, 0xF12E_BA2D, &contributions, &sections);
+        let bytes = fixtures::container(&[None, Some(info), None, Some(dbi), None, Some(vec![0; 32]), Some(vec![0; 64])]);
+        let path = fixtures::write(&bytes, "debug-info");
+        let mut pdb = PdbFile::open(&path).expect("the synthetic container carries a DBI stream with debug information");
+        std::fs::remove_file(&path).ok();
+
+        let debug_info = pdb.debug_info().expect("the DBI stream declares a parsable module list");
+        assert_eq!(debug_info.modules.len(), 1);
+        assert_eq!(debug_info.modules[0].name, "unit.obj");
+        assert_eq!(debug_info.contributions, vec![SectionContribution { module: 0, section: 1, offset: 0x20, size: 0x40 }]);
+        assert_eq!(debug_info.sections, vec![SectionMapEntry { frame: 1, offset: 0, byte_length: 0x200 }]);
     }
 
     #[test]
