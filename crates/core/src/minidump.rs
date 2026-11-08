@@ -186,7 +186,7 @@ pub struct AnalysisTimings {
     pub block_table: f64,
     /// Stack block read, frame scan, frame-pointer chain and call-site checks.
     pub stack: f64,
-    /// Image and PDB lookup plus `dbghelp` symbol resolution.
+    /// Image and PDB lookup plus PDB symbol resolution.
     pub symbols: f64,
     /// Whole `analyze` call for this dump.
     pub total: f64,

@@ -1,4 +1,4 @@
-//! PDB reading without `dbghelp`.
+//! PDB reading with no host symbol library.
 //!
 //! A kernel PDB is an MSF container of numbered streams. Function names come from the public
 //! symbol records, which carry a section number and an offset inside that section. This module

@@ -77,7 +77,7 @@ pub fn capabilities() -> Capabilities {
         "kernel module enumeration is implemented for Windows only"
     };
     let symbol_detail = if windows {
-        "`dbghelp` is bound at runtime and names frames when `OPEN_DEBUGGER_SYMBOL_STORE` or the Windows Kits symbol directory holds the module image and PDB for the recorded timestamp and size, otherwise frames stay at `MODULE+offset`"
+        "frames are named from the module's own PDB, read in-process with no host symbol library, when `OPEN_DEBUGGER_SYMBOL_STORE` or the Windows Kits symbol directory holds the module image and PDB for the recorded timestamp and size, otherwise frames stay at `MODULE+offset`"
     }
     else {
         "the Windows debug engine is available on Windows only"

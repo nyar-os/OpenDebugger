@@ -49,7 +49,7 @@ export type AnalysisTimings = {
     blockTable: number;
     /** Stack read, frame scan and call-site checks. */
     stack: number;
-    /** Image and PDB lookup plus `dbghelp` symbol resolution. */
+    /** Image and PDB lookup plus PDB symbol resolution. */
     symbols: number;
     total: number;
 };
@@ -81,7 +81,7 @@ export type MissingSymbol = {
 /** Symbol store state for one analysis. */
 export type SymbolDiagnostics = {
     store?: string;
-    /** True when `dbghelp` was bound and accepted the store. */
+    /** True when the store was found and its image and PDB pairs were readable. */
     engine: boolean;
     /** Modules whose image or PDB is missing, each with a prefetch command when one can be formed. */
     missing: MissingSymbol[];

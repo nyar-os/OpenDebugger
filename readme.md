@@ -73,16 +73,18 @@ into a module but cannot be verified are reported in a separate `stackGuesses` l
 appear in the trusted sequence. A triage dump carries no unwind metadata, so this is not a
 metadata-driven unwind.
 
-Function names come from `dbghelp.dll`, bound at runtime through the same export names a
-debugger uses, from a local symbol store. The store is `OPEN_DEBUGGER_SYMBOL_STORE` when
-set, otherwise the Windows Kits debugger `sym` directory. A triage dump contains no module
-binaries, so the store must hold the module image and its PDB for the exact timestamp and
-size recorded in the dump; a frame whose module is missing keeps its `MODULE+offset` form
-and `report.symbols` names the module, the image path, the PDB name and its `<GUID><age>`
-key, plus a `symchk` command that prefetches both. This binding never downloads symbols
-itself: on a clean machine run that command with the Debugging Tools and
-`srv*https://msdl.microsoft.com/download/symbols`, then point `OPEN_DEBUGGER_SYMBOL_STORE`
-at the resulting directory.
+Function names are read from the module's own PDB in a local symbol store, with no host
+debug library. The store is `OPEN_DEBUGGER_SYMBOL_STORE` when set, otherwise the Windows Kits
+debugger `sym` directory. A triage dump contains no module binaries, so the store must hold the
+module image and its PDB for the exact timestamp and size recorded in the dump; a frame whose
+module is missing keeps its `MODULE+offset` form and `report.symbols` names the module, the
+image path, the PDB name and its `<GUID><age>` key, plus a `symchk` command that prefetches
+both. This reader never downloads symbols itself: on a clean machine run that command with the
+Debugging Tools and `srv*https://msdl.microsoft.com/download/symbols`, then point
+`OPEN_DEBUGGER_SYMBOL_STORE` at the resulting directory. Names and displacements come from the
+PDB's public symbols and the function's byte length from the procedure record in the module
+symbol stream that contributed the section, so a name is never borrowed from a neighbouring
+symbol.
 
 ## License
 

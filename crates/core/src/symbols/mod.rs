@@ -5,17 +5,15 @@
 //! finds both in a local symbol store laid out like the debugger `sym` directory, and `store` reads
 //! the image identity the store keys on.
 //!
-//! When an image or PDB is missing the frame keeps its `MODULE+offset` form and the diagnostics
-//! name the module, the expected store keys, and the command that prefetches the missing files.
+//! Names and displacements come from the PDB's public symbols and procedure lengths from its
+//! module symbol streams, so naming a frame needs no host library. When an image or PDB is missing
+//! the frame keeps its `MODULE+offset` form and the diagnostics name the module, the expected store
+//! keys, and the command that prefetches the missing files.
 
 use serde::{Deserialize, Serialize};
 
 use crate::triage::KernelModule;
 
-#[cfg(windows)]
-mod dbghelp;
-/// The portable reader. Only tests drive it until it replaces the binding above.
-#[cfg(all(test, windows))]
 mod from_pdb;
 mod store;
 
@@ -58,38 +56,6 @@ pub(crate) struct ResolvedSymbol {
 ///
 /// Returns one entry per address, in the same order, plus diagnostics describing missing inputs.
 pub(crate) fn function_names(modules: &[KernelModule], addresses: &[u64]) -> (Vec<Option<ResolvedSymbol>>, SymbolDiagnostics) {
-    #[cfg(windows)]
-    {
-        dbghelp::function_names(modules, addresses)
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (modules, addresses);
-        (
-            Vec::new(),
-            SymbolDiagnostics {
-                warnings: vec!["function names need `dbghelp`, which is only bound on Windows, so frames stay at `MODULE+offset`".to_string()],
-                ..SymbolDiagnostics::default()
-            },
-        )
-    }
-}
-
-/// Resolves `addresses` exactly as the PDB spells the names, without undecoration.
-///
-/// Only the conformance check uses this, so the pure PDB reader can be compared with the same
-/// spelling `dbghelp` reads from the file rather than with its normalized output.
-#[cfg(all(test, windows))]
-pub(crate) fn function_names_raw(modules: &[KernelModule], addresses: &[u64]) -> (Vec<Option<ResolvedSymbol>>, SymbolDiagnostics) {
-    dbghelp::function_names_raw(modules, addresses)
-}
-
-/// Resolves `addresses` through the PDB reader alone, with no `dbghelp` binding.
-///
-/// Only the conformance check calls this, so the portable reader can be compared with the bound
-/// engine over the same addresses before it becomes the product path.
-#[cfg(all(test, windows))]
-pub(crate) fn function_names_from_pdb(modules: &[KernelModule], addresses: &[u64]) -> (Vec<Option<ResolvedSymbol>>, SymbolDiagnostics) {
     from_pdb::function_names(modules, addresses)
 }
 

@@ -30,6 +30,10 @@ use crate::{
 
 use super::{MissingSymbol, ResolvedSymbol, SymbolDiagnostics, store, unique_modules};
 
+/// The recorded frame table of a real dump, which holds the reader to evidence across the switch.
+#[cfg(test)]
+mod golden;
+
 /// Resolves `addresses` against the module table, reading each module's PDB from the store.
 pub(super) fn function_names(modules: &[KernelModule], addresses: &[u64]) -> (Vec<Option<ResolvedSymbol>>, SymbolDiagnostics) {
     let mut symbols = std::iter::repeat_with(|| None).take(addresses.len()).collect::<Vec<Option<ResolvedSymbol>>>();

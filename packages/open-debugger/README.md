@@ -83,11 +83,12 @@ Kernel triage dumps resolve loaded modules and stack frames to `MODULE+offset`. 
 frames carry a `source` of `context`, `call-site` or `frame-pointer`; a triage dump has no
 unwind metadata, so the frame-pointer link is validated against the module image before it
 is trusted. Stack words that cannot be verified are returned in `stackGuesses` instead of the
-trusted `stack` list. Function names are added from `dbghelp` when a local symbol store, set
-through `OPEN_DEBUGGER_SYMBOL_STORE` or the Windows Kits debugger `sym` directory, holds the
-module image and PDB for the recorded timestamp and size. `report.symbols` lists every
-module that could not be named, with the expected image and PDB paths, the PDB `<GUID><age>`
-key, and a `symchk` command that prefetches both from a symbol server.
+trusted `stack` list. Function names are read from the module's own PDB, with no host debug
+library, when a local symbol store set through `OPEN_DEBUGGER_SYMBOL_STORE` or the Windows
+Kits debugger `sym` directory holds the module image and PDB for the recorded timestamp and
+size. `report.symbols` lists every module that could not be named, with the expected image and
+PDB paths, the PDB `<GUID><age>` key, and a `symchk` command that prefetches both from a symbol
+server.
 
 ## Agent skills
 

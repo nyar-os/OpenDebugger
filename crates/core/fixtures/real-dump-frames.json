@@ -1,0 +1,308 @@
+{
+  "dump": {
+    "file": "110426-11062-01.dmp",
+    "bytes": 2677881,
+    "modifiedUnixSeconds": 1793757987,
+    "fnv1a64": "0xB00A57CE18D46739"
+  },
+  "acquisition": "Kernel bugcheck triage dump collected from a Windows x64 host's minidump directory as `110426-11062-01.dmp`, analyzed with the `ntkrnlmp.pdb` published for that build under symbol store key `45B0BEEFE03C289F032E4EC96C7871741`",
+  "frames": [
+    {
+      "address": "0xFFFFF807B64B85D0",
+      "module": "ntoskrnl.exe",
+      "section": 8,
+      "offset": 2852304,
+      "nameSource": "public",
+      "function": "KeBugCheckEx",
+      "displacement": 0,
+      "procedureLength": null,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B623D915",
+      "module": "ntoskrnl.exe",
+      "section": 8,
+      "offset": 250864,
+      "nameSource": "public",
+      "function": "MiRemoveLockedPageChargeAndDecRef",
+      "displacement": 1317,
+      "procedureLength": 1698,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B63A52B3",
+      "module": "ntoskrnl.exe",
+      "section": 8,
+      "offset": 1724888,
+      "nameSource": "public",
+      "function": "MiUnlockCodePage",
+      "displacement": 219,
+      "procedureLength": 514,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B67C7C76",
+      "module": "ntoskrnl.exe",
+      "section": 9,
+      "offset": 1035260,
+      "nameSource": "public",
+      "function": "MiUnlockDriverCode",
+      "displacement": 122,
+      "procedureLength": null,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B6A65F48",
+      "module": "ntoskrnl.exe",
+      "section": 9,
+      "offset": 3779764,
+      "nameSource": "public",
+      "function": "MiUnloadSystemImage",
+      "displacement": 660,
+      "procedureLength": null,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B6A65C8C",
+      "module": "ntoskrnl.exe",
+      "section": 9,
+      "offset": 3779648,
+      "nameSource": "public",
+      "function": "MmUnloadSystemImage",
+      "displacement": 76,
+      "procedureLength": null,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B6A65BAB",
+      "module": "ntoskrnl.exe",
+      "section": 9,
+      "offset": 3779376,
+      "nameSource": "public",
+      "function": "IopDeleteDriver",
+      "displacement": 123,
+      "procedureLength": null,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B684534A",
+      "module": "ntoskrnl.exe",
+      "section": 9,
+      "offset": 1548896,
+      "nameSource": "public",
+      "function": "ObpRemoveObjectRoutine",
+      "displacement": 234,
+      "procedureLength": null,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B6335B9C",
+      "module": "ntoskrnl.exe",
+      "section": 8,
+      "offset": 1268512,
+      "nameSource": "public",
+      "function": "ObfDereferenceObject",
+      "displacement": 124,
+      "procedureLength": null,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B6AFF947",
+      "module": "ntoskrnl.exe",
+      "section": 9,
+      "offset": 4106272,
+      "nameSource": null,
+      "function": null,
+      "displacement": 0,
+      "procedureLength": null,
+      "named": false
+    },
+    {
+      "address": "0xFFFFF807B6918FEB",
+      "module": "ntoskrnl.exe",
+      "section": 9,
+      "offset": 2416544,
+      "nameSource": "public",
+      "function": "IopDeleteDevice",
+      "displacement": 75,
+      "procedureLength": null,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B684534A",
+      "module": "ntoskrnl.exe",
+      "section": 9,
+      "offset": 1548896,
+      "nameSource": "public",
+      "function": "ObpRemoveObjectRoutine",
+      "displacement": 234,
+      "procedureLength": null,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B622DB79",
+      "module": "ntoskrnl.exe",
+      "section": 8,
+      "offset": 187136,
+      "nameSource": "public",
+      "function": "ObfDereferenceObjectWithTag",
+      "displacement": 121,
+      "procedureLength": null,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B6A4A4CB",
+      "module": "ntoskrnl.exe",
+      "section": 9,
+      "offset": 3667068,
+      "nameSource": "public",
+      "function": "PiClearDeviceObjectList",
+      "displacement": 79,
+      "procedureLength": null,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B6A4A462",
+      "module": "ntoskrnl.exe",
+      "section": 9,
+      "offset": 3667028,
+      "nameSource": "public",
+      "function": "PipFreeDeviceObjectList",
+      "displacement": 14,
+      "procedureLength": null,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B6A4A436",
+      "module": "ntoskrnl.exe",
+      "section": 9,
+      "offset": 3666972,
+      "nameSource": "public",
+      "function": "IopFreeRelationList",
+      "displacement": 26,
+      "procedureLength": null,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B6A4A3EA",
+      "module": "ntoskrnl.exe",
+      "section": 9,
+      "offset": 3666720,
+      "nameSource": "public",
+      "function": "PipRemoveDevicesInRelationList",
+      "displacement": 202,
+      "procedureLength": null,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B6A4A288",
+      "module": "ntoskrnl.exe",
+      "section": 9,
+      "offset": 3666192,
+      "nameSource": "public",
+      "function": "PnpDelayedRemoveWorker",
+      "displacement": 376,
+      "procedureLength": 519,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B6AFF13E",
+      "module": "ntoskrnl.exe",
+      "section": 9,
+      "offset": 4106272,
+      "nameSource": null,
+      "function": null,
+      "displacement": 0,
+      "procedureLength": null,
+      "named": false
+    },
+    {
+      "address": "0xFFFFF807B64714C6",
+      "module": "ntoskrnl.exe",
+      "section": 8,
+      "offset": 2560936,
+      "nameSource": "public",
+      "function": "PnpIsChainDereferenced",
+      "displacement": 286,
+      "procedureLength": 332,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B632BEA2",
+      "module": "ntoskrnl.exe",
+      "section": 8,
+      "offset": 1228432,
+      "nameSource": "public",
+      "function": "KeLeaveCriticalRegion",
+      "displacement": 18,
+      "procedureLength": null,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B691B008",
+      "module": "ntoskrnl.exe",
+      "section": 9,
+      "offset": 2424284,
+      "nameSource": "public",
+      "function": "PnpProcessQueryRemoveAndEject",
+      "displacement": 556,
+      "procedureLength": 1433,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B68FB14B",
+      "module": "ntoskrnl.exe",
+      "section": 9,
+      "offset": 2293860,
+      "nameSource": "public",
+      "function": "PnpProcessTargetDeviceEvent",
+      "displacement": 231,
+      "procedureLength": null,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B69089B7",
+      "module": "ntoskrnl.exe",
+      "section": 9,
+      "offset": 2349008,
+      "nameSource": "public",
+      "function": "PnpDeviceEventWorker",
+      "displacement": 487,
+      "procedureLength": 930,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B63704A2",
+      "module": "ntoskrnl.exe",
+      "section": 8,
+      "offset": 1508080,
+      "nameSource": "public",
+      "function": "ExpWorkerThread",
+      "displacement": 434,
+      "procedureLength": null,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B645585A",
+      "module": "ntoskrnl.exe",
+      "section": 8,
+      "offset": 2447360,
+      "nameSource": "public",
+      "function": "PspSystemThreadStartup",
+      "displacement": 90,
+      "procedureLength": null,
+      "named": true
+    },
+    {
+      "address": "0xFFFFF807B667AE54",
+      "module": "ntoskrnl.exe",
+      "section": 8,
+      "offset": 4697632,
+      "nameSource": "public",
+      "function": "KiStartSystemThread",
+      "displacement": 52,
+      "procedureLength": null,
+      "named": true
+    }
+  ]
+}
