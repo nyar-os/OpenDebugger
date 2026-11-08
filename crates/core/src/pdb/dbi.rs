@@ -40,6 +40,9 @@ const MODULE_HEADER_SIZE: usize = 64;
 const MODULE_SECTION_OFFSET: usize = 4;
 const MODULE_CONTRIBUTION_OFFSET: usize = 8;
 const MODULE_CONTRIBUTION_SIZE_OFFSET: usize = 12;
+/// The stream that holds this module's symbols and the declared byte size of that substream.
+const MODULE_SYMBOL_STREAM_OFFSET: usize = 0x22;
+const MODULE_SYMBOL_BYTES_OFFSET: usize = 0x24;
 /// Section number a module record carries when the linker placed none of its bytes.
 const NO_SECTION: u16 = 0xFFFF;
 
@@ -89,6 +92,10 @@ pub struct ModulePlacement {
 pub struct ModuleInfo {
     pub name: String,
     pub object_name: String,
+    /// Stream holding this object file's symbol records, or zero when the module recorded none.
+    pub symbol_stream: u16,
+    /// Declared byte size of that symbol substream.
+    pub symbol_bytes: u32,
     /// `None` when the record carries the placeholder section number, which marks an object
     /// file whose bytes were merged elsewhere or discarded.
     pub placement: Option<ModulePlacement>,
@@ -288,6 +295,10 @@ fn parse_modules(bytes: &[u8], count: u32) -> Result<Vec<ModuleInfo>, PdbError> 
         })?;
         let section = half(header, MODULE_SECTION_OFFSET)
             .ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, format!("module record at offset {start} is truncated")))?;
+        let symbol_stream = half(header, MODULE_SYMBOL_STREAM_OFFSET)
+            .ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, format!("module record at offset {start} is truncated")))?;
+        let symbol_bytes = word(header, MODULE_SYMBOL_BYTES_OFFSET)
+            .ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, format!("module record at offset {start} is truncated")))?;
         cursor = start + MODULE_HEADER_SIZE;
         let name = take_string(bytes, &mut cursor, start)?;
         let object_name = take_string(bytes, &mut cursor, start)?;
@@ -299,7 +310,13 @@ fn parse_modules(bytes: &[u8], count: u32) -> Result<Vec<ModuleInfo>, PdbError> 
             ));
         }
         cursor = aligned;
-        modules.push(ModuleInfo { name: name.to_owned(), object_name: object_name.to_owned(), placement: placement(header, start, section)? });
+        modules.push(ModuleInfo {
+            name: name.to_owned(),
+            object_name: object_name.to_owned(),
+            symbol_stream,
+            symbol_bytes,
+            placement: placement(header, start, section)?,
+        });
     }
     if cursor != bytes.len() {
         return Err(PdbError::new(
@@ -455,8 +472,24 @@ mod tests {
     #[test]
     fn reads_the_module_list_contributions_and_section_map() {
         let modules = [
-            fixtures::FixtureModule { name: "ab.obj", object_name: "ab.obj", section: 1, offset: 0x10, size: 0x20 },
-            fixtures::FixtureModule { name: "* Linker *", object_name: "", section: NO_SECTION, offset: 0, size: -1 },
+            fixtures::FixtureModule {
+                name: "ab.obj",
+                object_name: "ab.obj",
+                section: 1,
+                offset: 0x10,
+                size: 0x20,
+                symbol_stream: 7,
+                symbol_bytes: 0x1C,
+            },
+            fixtures::FixtureModule {
+                name: "* Linker *",
+                object_name: "",
+                section: NO_SECTION,
+                offset: 0,
+                size: -1,
+                symbol_stream: 0,
+                symbol_bytes: 0,
+            },
         ];
         let contributions = [(0u16, 1u16, 0x10i32, 0x20i32), (1, 1, 0x30, 0x10)];
         let sections = [(1u16, 0u32, 0x100u32), (0, 0, u32::MAX)];
@@ -467,8 +500,11 @@ mod tests {
         assert_eq!(info.modules[0].name, "ab.obj");
         assert_eq!(info.modules[0].object_name, "ab.obj");
         assert_eq!(info.modules[0].placement, Some(ModulePlacement { section: 1, offset: 0x10, size: 0x20 }));
+        assert_eq!(info.modules[0].symbol_stream, 7, "the module record names its own symbol stream");
+        assert_eq!(info.modules[0].symbol_bytes, 0x1C);
         assert_eq!(info.modules[1].name, "* Linker *");
         assert_eq!(info.modules[1].object_name, "");
+        assert_eq!(info.modules[1].symbol_stream, 0, "a module that recorded no symbols points at stream zero");
         assert_eq!(info.modules[1].placement, None, "the placeholder section number means no placement");
 
         assert_eq!(
@@ -486,7 +522,15 @@ mod tests {
 
     #[test]
     fn reads_the_section_contribution_version_two_layout() {
-        let modules = [fixtures::FixtureModule { name: "only.obj", object_name: "only.obj", section: 2, offset: 0x40, size: 0x18 }];
+        let modules = [fixtures::FixtureModule {
+            name: "only.obj",
+            object_name: "only.obj",
+            section: 2,
+            offset: 0x40,
+            size: 0x18,
+            symbol_stream: 7,
+            symbol_bytes: 0,
+        }];
         let contributions = [(0u16, 2u16, 0x40i32, 0x18i32)];
         let sections = [(2u16, 0u32, 0x80u32)];
         let bytes = fixtures::dbi_stream_with_debug_info(&modules, SECTION_CONTRIBUTION_V2, &contributions, &sections);
@@ -520,7 +564,15 @@ mod tests {
 
     #[test]
     fn module_records_that_do_not_fill_the_substream_are_rejected() {
-        let modules = [fixtures::FixtureModule { name: "ab.obj", object_name: "ab.obj", section: 1, offset: 0, size: 4 }];
+        let modules = [fixtures::FixtureModule {
+            name: "ab.obj",
+            object_name: "ab.obj",
+            section: 1,
+            offset: 0,
+            size: 4,
+            symbol_stream: 0,
+            symbol_bytes: 0,
+        }];
         let bytes = fixtures::dbi_stream_with_debug_info(&modules, SECTION_CONTRIBUTION_V60, &[], &[]);
         let header = parse_header(&bytes).expect("the header is valid");
         let mut cursor = HEADER_SIZE;
@@ -536,7 +588,15 @@ mod tests {
 
     #[test]
     fn a_contribution_that_names_a_missing_module_is_rejected() {
-        let modules = [fixtures::FixtureModule { name: "only.obj", object_name: "only.obj", section: 1, offset: 0, size: 4 }];
+        let modules = [fixtures::FixtureModule {
+            name: "only.obj",
+            object_name: "only.obj",
+            section: 1,
+            offset: 0,
+            size: 4,
+            symbol_stream: 0,
+            symbol_bytes: 0,
+        }];
         let contributions = [(7u16, 1u16, 0i32, 4i32)];
         let bytes = fixtures::dbi_stream_with_debug_info(&modules, SECTION_CONTRIBUTION_V60, &contributions, &[]);
         let error = parse(&bytes).expect_err("a contribution must belong to a listed module");

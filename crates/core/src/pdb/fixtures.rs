@@ -143,6 +143,10 @@ pub(crate) struct FixtureModule<'a> {
     pub section: u16,
     pub offset: i32,
     pub size: i32,
+    /// Stream holding this module's symbols, zero when it recorded none.
+    pub symbol_stream: u16,
+    /// Declared byte size of that substream.
+    pub symbol_bytes: u32,
 }
 
 /// Builds one module record: the 64-byte header, the two strings and the alignment padding.
@@ -151,6 +155,8 @@ pub(crate) fn module_record(module: &FixtureModule<'_>) -> Vec<u8> {
     record[4..6].copy_from_slice(&module.section.to_le_bytes());
     record[8..12].copy_from_slice(&module.offset.to_le_bytes());
     record[12..16].copy_from_slice(&module.size.to_le_bytes());
+    record[0x22..0x24].copy_from_slice(&module.symbol_stream.to_le_bytes());
+    record[0x24..0x28].copy_from_slice(&module.symbol_bytes.to_le_bytes());
     record.extend(module.name.as_bytes());
     record.push(0);
     record.extend(module.object_name.as_bytes());
@@ -159,6 +165,30 @@ pub(crate) fn module_record(module: &FixtureModule<'_>) -> Vec<u8> {
         record.push(0);
     }
     record
+}
+
+/// Builds a module symbol substream: the signature, then one procedure record per entry.
+///
+/// `functions` entries are `(kind, section, offset, length, name)`. The record layout is the one
+/// the compiler writes: the three linking offsets, the length, the two debug offsets, the type
+/// index, the offset, the section, the flags, then the name.
+pub(crate) fn module_symbol_stream(functions: &[(u16, u16, u32, u32, &str)]) -> Vec<u8> {
+    let mut bytes = 4u32.to_le_bytes().to_vec();
+    for (kind, section, offset, length, name) in functions {
+        let payload_bytes = 35 + name.len() + 1;
+        let record_length = (payload_bytes + 2) as u16;
+        bytes.extend(record_length.to_le_bytes());
+        bytes.extend(kind.to_le_bytes());
+        bytes.extend([0u8; 12]);
+        bytes.extend(length.to_le_bytes());
+        bytes.extend([0u8; 12]);
+        bytes.extend(offset.to_le_bytes());
+        bytes.extend(section.to_le_bytes());
+        bytes.push(0);
+        bytes.extend(name.as_bytes());
+        bytes.push(0);
+    }
+    bytes
 }
 
 /// Builds a DBI stream with a module list, section contributions and a section map.

@@ -3,8 +3,9 @@
 //! A kernel PDB is an MSF container of numbered streams. Function names come from the public
 //! symbol records, which carry a section number and an offset inside that section. This module
 //! reads the container, the PDB info stream, the DBI header fields that name the public symbol and
-//! symbol record streams, and the DBI module list, section contributions and section map. Type
-//! information, variables and source lines are not read.
+//! symbol record streams, the DBI module list, section contributions and section map, and the
+//! per-module symbol streams that record each procedure's byte length. Type information, variables
+//! and source lines are not read.
 //!
 //! Every unrecognized container shape, PDB version or stream convention is a structured error
 //! carrying a stable code. No path returns an empty result to stand in for a format this code
@@ -17,6 +18,7 @@ use serde::Serialize;
 mod dbi;
 mod info;
 mod lookup;
+mod module;
 mod msf;
 mod publics;
 
@@ -28,6 +30,7 @@ mod fixtures;
 pub use dbi::{DbiHeader, DebugInfo, ModuleInfo, ModulePlacement, SectionContribution, SectionMapEntry};
 pub use info::PdbInfo;
 pub use lookup::{FunctionEntry, FunctionHit, FunctionIndex};
+pub use module::{ModuleFunction, ModuleSymbols, S_GPROC32, S_GPROC32_ID, S_LPROC32, S_LPROC32_ID};
 pub use msf::Msf;
 pub use publics::{PublicSymbol, PublicSymbolTable, PublicsHeader};
 
@@ -240,6 +243,47 @@ impl PdbFile {
         dbi::parse(&stream)
     }
 
+    /// Reads the symbol records of one module and collects its procedure records.
+    ///
+    /// Only the byte size the module record declares is read, so a module that recorded no
+    /// symbols costs nothing. A declared size that does not fit the stream, or a stream number
+    /// the container does not hold, is a structured failure: the PDB and its own module list
+    /// would then disagree.
+    pub fn module_symbols(&mut self, module: &ModuleInfo) -> Result<ModuleSymbols, PdbError> {
+        if module.symbol_bytes == 0 {
+            return Ok(ModuleSymbols::default());
+        }
+        if module.symbol_stream == 0 {
+            return Err(PdbError::new(
+                PdbErrorKind::UnknownStreamConvention,
+                format!(
+                    "module `{}` declares {} symbol bytes but points at stream 0, which holds no symbols",
+                    module.name, module.symbol_bytes
+                ),
+            ));
+        }
+        let stream = self.read_stream(u32::from(module.symbol_stream)).map_err(|error| match error.kind() {
+            PdbErrorKind::OutOfRange => PdbError::new(
+                PdbErrorKind::OutOfRange,
+                format!("module `{}` points its symbols at stream {} but {error}", module.name, module.symbol_stream),
+            ),
+            other => PdbError::new(other, error.detail()),
+        })?;
+        let bytes = stream.get(..module.symbol_bytes as usize).ok_or_else(|| {
+            PdbError::new(
+                PdbErrorKind::Truncated,
+                format!(
+                    "module `{}` declares {} symbol bytes but stream {} holds {}",
+                    module.name,
+                    module.symbol_bytes,
+                    module.symbol_stream,
+                    stream.len()
+                ),
+            )
+        })?;
+        module::parse(bytes)
+    }
+
     fn role(&self, index: u32, has_stream: bool, name: Option<&str>) -> StreamRole {
         if !has_stream {
             return StreamRole::Nil;
@@ -300,7 +344,15 @@ mod tests {
     #[test]
     fn reads_the_debug_info_of_a_synthetic_container() {
         let info = fixtures::info_stream(20_000_404, &[]);
-        let modules = [fixtures::FixtureModule { name: "unit.obj", object_name: "unit.obj", section: 1, offset: 0x20, size: 0x40 }];
+        let modules = [fixtures::FixtureModule {
+            name: "unit.obj",
+            object_name: "unit.obj",
+            section: 1,
+            offset: 0x20,
+            size: 0x40,
+            symbol_stream: 7,
+            symbol_bytes: 0,
+        }];
         let contributions = [(0u16, 1u16, 0x20i32, 0x40i32)];
         let sections = [(1u16, 0u32, 0x200u32)];
         let dbi = fixtures::dbi_stream_with_debug_info(&modules, 0xF12E_BA2D, &contributions, &sections);
@@ -418,6 +470,47 @@ mod tests {
         assert!(
             table.symbols.iter().all(|symbol| symbol.section != 0 && !symbol.name.is_empty()),
             "every public record names a section and a symbol"
+        );
+    }
+
+    /// Reads every module symbol stream of a real PDB, so the module record's stream number and
+    /// declared byte size are checked against the container rather than against a fixture.
+    #[test]
+    #[ignore = "requires OPEN_DEBUGGER_REAL_PDB to point at a real Windows PDB"]
+    fn reads_the_module_symbol_streams_of_a_real_kernel_pdb() {
+        let path = std::env::var_os("OPEN_DEBUGGER_REAL_PDB").expect("set OPEN_DEBUGGER_REAL_PDB to a real PDB");
+        let mut pdb = PdbFile::open(Path::new(&path)).expect("open the real PDB");
+        let debug_info = pdb.debug_info().expect("read the DBI module list");
+        let mut with_symbols = 0usize;
+        let mut functions = 0usize;
+        let mut other_records = 0usize;
+        for module in &debug_info.modules {
+            if module.symbol_bytes == 0 {
+                continue;
+            }
+            with_symbols += 1;
+            let symbols = pdb.module_symbols(module).unwrap_or_else(|error| {
+                panic!("module `{}` stream {} declares {} bytes: {error}", module.name, module.symbol_stream, module.symbol_bytes)
+            });
+            functions += symbols.functions.len();
+            other_records += symbols.other_records;
+        }
+        println!("{} modules, {with_symbols} with symbols, {functions} procedures, {other_records} other records", debug_info.modules.len());
+
+        let first = debug_info.modules.iter().find(|module| module.symbol_bytes > 0).expect("some module records symbols");
+        let sample = pdb.module_symbols(first).expect("the first module with symbols parses");
+        for function in sample.functions.iter().take(4) {
+            println!(
+                "  {} section {} offset 0x{:X} length 0x{:X} kind 0x{:04X}",
+                first.name, function.section, function.offset, function.length, function.kind
+            );
+        }
+
+        assert!(with_symbols > 1, "a kernel PDB records symbols for many object files, got {with_symbols}");
+        assert!(functions > with_symbols, "every object file with symbols carries at least one procedure, got {functions}");
+        assert!(
+            sample.functions.iter().any(|function| function.length > 0),
+            "procedure records carry byte lengths, so at least one must be non-zero"
         );
     }
 }
