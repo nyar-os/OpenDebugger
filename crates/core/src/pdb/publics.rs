@@ -10,7 +10,7 @@
 //! record kinds are skipped: the record stream has many of them and only this one carries a
 //! public address.
 
-use super::{half, word, PdbError, PdbErrorKind};
+use super::{PdbError, PdbErrorKind, half, word};
 
 /// CodeView record kind for a public symbol.
 pub const S_PUB32: u16 = 0x110E;
@@ -163,9 +163,10 @@ fn read_public(records: &[u8], start: usize, length: usize) -> Result<PublicSymb
     let offset = word(payload, 4).ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, "`S_PUB32` record is truncated"))?;
     let section = half(payload, 8).ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, "`S_PUB32` record is truncated"))?;
     let tail = &payload[PUBLIC_PAYLOAD_BEFORE_NAME..];
-    let name_end = tail.iter().position(|byte| *byte == 0).ok_or_else(|| {
-        PdbError::new(PdbErrorKind::UnsupportedSymbolFormat, format!("`S_PUB32` name at offset {start} has no terminator"))
-    })?;
+    let name_end = tail
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or_else(|| PdbError::new(PdbErrorKind::UnsupportedSymbolFormat, format!("`S_PUB32` name at offset {start} has no terminator")))?;
     if name_end == 0 {
         return Err(PdbError::new(PdbErrorKind::UnsupportedSymbolFormat, format!("`S_PUB32` record at offset {start} has an empty name")));
     }

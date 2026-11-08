@@ -51,7 +51,8 @@ pub fn parse_header(bytes: &[u8]) -> Result<DbiHeader, PdbError> {
     let age = word(bytes, AGE_OFFSET).ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, "DBI header is truncated"))?;
     let global_stream = half(bytes, GLOBAL_STREAM_OFFSET).ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, "DBI header is truncated"))?;
     let public_stream = half(bytes, PUBLIC_STREAM_OFFSET).ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, "DBI header is truncated"))?;
-    let symbol_record_stream = half(bytes, SYMBOL_RECORD_STREAM_OFFSET).ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, "DBI header is truncated"))?;
+    let symbol_record_stream =
+        half(bytes, SYMBOL_RECORD_STREAM_OFFSET).ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, "DBI header is truncated"))?;
     Ok(DbiHeader { age, global_stream, public_stream, symbol_record_stream })
 }
 

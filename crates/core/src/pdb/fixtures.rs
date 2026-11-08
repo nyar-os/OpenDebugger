@@ -58,7 +58,10 @@ pub(crate) fn container(streams: &[Option<Vec<u8>>]) -> Vec<u8> {
     data[directory_start..directory_start + directory.len()].copy_from_slice(&directory);
 
     for (stream, list) in streams.iter().zip(&lists) {
-        let Some(bytes) = stream else { continue };
+        let Some(bytes) = stream
+        else {
+            continue;
+        };
         for (chunk, block) in bytes.chunks(BLOCK).zip(list) {
             let start = *block as usize * BLOCK;
             data[start..start + chunk.len()].copy_from_slice(chunk);

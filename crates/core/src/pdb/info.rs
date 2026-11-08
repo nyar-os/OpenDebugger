@@ -71,7 +71,9 @@ pub fn parse(bytes: &[u8]) -> Result<PdbInfo, PdbError> {
     if version != SUPPORTED_VERSION {
         return Err(PdbError::new(
             PdbErrorKind::UnsupportedPdbVersion,
-            format!("PDB info stream version {version} (0x{version:08X}) is not supported, only {SUPPORTED_VERSION} (0x{SUPPORTED_VERSION:08X}) is"),
+            format!(
+                "PDB info stream version {version} (0x{version:08X}) is not supported, only {SUPPORTED_VERSION} (0x{SUPPORTED_VERSION:08X}) is"
+            ),
         ));
     }
     let signature = word(bytes, 4).ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, "PDB info stream is truncated"))?;
@@ -168,12 +170,16 @@ fn take_bit_vector(bytes: &[u8], cursor: &mut usize, bucket_count: u32) -> Resul
 
 /// Resolves a string table offset, which must point at a `/`-prefixed name.
 fn name_at(names: &[u8], offset: u32) -> Result<String, PdbError> {
-    let start = usize::try_from(offset).map_err(|_| PdbError::new(PdbErrorKind::OutOfRange, format!("name offset {offset} is out of range")))?;
+    let start =
+        usize::try_from(offset).map_err(|_| PdbError::new(PdbErrorKind::OutOfRange, format!("name offset {offset} is out of range")))?;
     let Some(tail) = names.get(start..)
     else {
         return Err(PdbError::new(PdbErrorKind::OutOfRange, format!("name offset {offset} is past the {}-byte string table", names.len())));
     };
-    let end = tail.iter().position(|byte| *byte == 0).ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, format!("name at offset {offset} has no terminator")))?;
+    let end = tail
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, format!("name at offset {offset} has no terminator")))?;
     let name = &tail[..end];
     if !name.starts_with(b"/") {
         return Err(PdbError::new(

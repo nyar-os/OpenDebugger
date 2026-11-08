@@ -64,13 +64,18 @@ impl Msf {
         let length = file.metadata().map_err(|source| PdbError::io(path, source))?.len();
         let superblock = read_range(&mut file, length, path, 0, SUPERBLOCK_SIZE, "MSF superblock")?;
         if superblock.get(..MAGIC.len()) != Some(MAGIC) {
-            return Err(PdbError::new(PdbErrorKind::UnsupportedContainer, "the file does not start with the `Microsoft C/C++ MSF 7.00` superblock"));
+            return Err(PdbError::new(
+                PdbErrorKind::UnsupportedContainer,
+                "the file does not start with the `Microsoft C/C++ MSF 7.00` superblock",
+            ));
         }
         let block_size = superblock_word(&superblock, BLOCK_SIZE_OFFSET)?;
         if !block_size.is_power_of_two() || !(MIN_BLOCK_SIZE..=MAX_BLOCK_SIZE).contains(&block_size) {
             return Err(PdbError::new(
                 PdbErrorKind::UnsupportedContainer,
-                format!("MSF declares a block size of {block_size}, outside the supported {MIN_BLOCK_SIZE}..={MAX_BLOCK_SIZE} power-of-two range"),
+                format!(
+                    "MSF declares a block size of {block_size}, outside the supported {MIN_BLOCK_SIZE}..={MAX_BLOCK_SIZE} power-of-two range"
+                ),
             ));
         }
         let block_count = superblock_word(&superblock, BLOCK_COUNT_OFFSET)?;
@@ -104,7 +109,8 @@ impl Msf {
 
         let map_entries = usize::try_from(directory_bytes.div_ceil(block_size))
             .map_err(|_| PdbError::new(PdbErrorKind::OutOfRange, format!("MSF directory needs {directory_bytes} bytes")))?;
-        let map_size = map_entries.checked_mul(4).ok_or_else(|| PdbError::new(PdbErrorKind::OutOfRange, "MSF directory block map size overflows"))?;
+        let map_size =
+            map_entries.checked_mul(4).ok_or_else(|| PdbError::new(PdbErrorKind::OutOfRange, "MSF directory block map size overflows"))?;
         if map_size > block_size as usize {
             return Err(PdbError::new(
                 PdbErrorKind::UnsupportedContainer,
@@ -115,7 +121,8 @@ impl Msf {
         let map_bytes = read_range(&mut file, length, path, map_offset, map_size, "MSF directory block map")?;
         let mut directory_blocks = Vec::with_capacity(map_entries);
         for index in 0..map_entries {
-            let block = word(&map_bytes, index * 4).ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, "MSF directory block map is truncated"))?;
+            let block =
+                word(&map_bytes, index * 4).ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, "MSF directory block map is truncated"))?;
             if block >= block_count {
                 return Err(PdbError::new(
                     PdbErrorKind::OutOfRange,
@@ -190,7 +197,10 @@ impl Msf {
             remaining -= chunk;
         }
         if remaining != 0 {
-            return Err(PdbError::new(PdbErrorKind::Truncated, format!("stream {index} declares {size} bytes but its block map supplies fewer")));
+            return Err(PdbError::new(
+                PdbErrorKind::Truncated,
+                format!("stream {index} declares {size} bytes but its block map supplies fewer"),
+            ));
         }
         Ok(buffer)
     }
@@ -212,20 +222,26 @@ fn parse_streams(
     let mut streams = Vec::with_capacity(stream_count as usize);
     let mut offset = sizes_end;
     for index in 0..stream_count as usize {
-        let size = word(directory, sizes_start + index * 4).ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, "MSF stream directory is truncated"))?;
+        let size = word(directory, sizes_start + index * 4)
+            .ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, "MSF stream directory is truncated"))?;
         if size == NIL_STREAM {
             streams.push(None);
             continue;
         }
         let needed = usize::try_from(size.div_ceil(block_size))
             .map_err(|_| PdbError::new(PdbErrorKind::OutOfRange, format!("stream {index} declares {size} bytes")))?;
-        let blocks_end = offset.checked_add(needed * 4).ok_or_else(|| PdbError::new(PdbErrorKind::OutOfRange, "MSF stream block list overflows"))?;
+        let blocks_end =
+            offset.checked_add(needed * 4).ok_or_else(|| PdbError::new(PdbErrorKind::OutOfRange, "MSF stream block list overflows"))?;
         if blocks_end > directory.len() {
-            return Err(PdbError::new(PdbErrorKind::Truncated, format!("MSF stream directory is too short for the block list of stream {index}")));
+            return Err(PdbError::new(
+                PdbErrorKind::Truncated,
+                format!("MSF stream directory is too short for the block list of stream {index}"),
+            ));
         }
         let mut blocks = Vec::with_capacity(needed);
         for entry in 0..needed {
-            let block = word(directory, offset + entry * 4).ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, "MSF stream block list is truncated"))?;
+            let block = word(directory, offset + entry * 4)
+                .ok_or_else(|| PdbError::new(PdbErrorKind::Truncated, "MSF stream block list is truncated"))?;
             if block >= block_count {
                 return Err(PdbError::new(
                     PdbErrorKind::OutOfRange,
@@ -240,7 +256,15 @@ fn parse_streams(
     Ok(streams)
 }
 
-fn read_blocks(file: &mut File, length: u64, path: &Path, blocks: &[u32], bytes: u32, block_size: u32, context: &str) -> Result<Vec<u8>, PdbError> {
+fn read_blocks(
+    file: &mut File,
+    length: u64,
+    path: &Path,
+    blocks: &[u32],
+    bytes: u32,
+    block_size: u32,
+    context: &str,
+) -> Result<Vec<u8>, PdbError> {
     let mut buffer = Vec::with_capacity(bytes as usize);
     let mut remaining = bytes as usize;
     for block in blocks {
@@ -262,7 +286,9 @@ fn read_range(file: &mut File, length: u64, path: &Path, offset: u64, size: usiz
     if size == 0 {
         return Ok(Vec::new());
     }
-    let end = offset.checked_add(size as u64).ok_or_else(|| PdbError::new(PdbErrorKind::OutOfRange, format!("{context} offset {offset} overflows")))?;
+    let end = offset
+        .checked_add(size as u64)
+        .ok_or_else(|| PdbError::new(PdbErrorKind::OutOfRange, format!("{context} offset {offset} overflows")))?;
     if end > length {
         return Err(PdbError::new(
             PdbErrorKind::Truncated,

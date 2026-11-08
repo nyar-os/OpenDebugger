@@ -12,12 +12,7 @@
 
 use std::{collections::BTreeMap, path::Path, time::Instant};
 
-use crate::{
-    minidump::analyze_file,
-    pdb::PdbFile,
-    pe::SectionHeader,
-    symbols,
-};
+use crate::{minidump::analyze_file, pdb::PdbFile, pe::SectionHeader, symbols};
 
 /// Number of RVAs sampled from the PDB on top of every stack frame address.
 const SAMPLE_COUNT: usize = 2000;
@@ -155,12 +150,8 @@ fn compares_public_symbols_with_dbghelp_on_a_real_dump() {
     let frame_count = addresses.len() - SAMPLE_COUNT;
 
     let absolute = addresses.iter().map(|(address, _)| *address).collect::<Vec<_>>();
-    let module_entry = || crate::triage::KernelModule {
-        name: module.name.clone(),
-        base: module_base,
-        size: module.size_bytes,
-        timestamp: module.timestamp,
-    };
+    let module_entry =
+        || crate::triage::KernelModule { name: module.name.clone(), base: module_base, size: module.size_bytes, timestamp: module.timestamp };
 
     let raw_started = Instant::now();
     let dbghelp_raw = symbols::function_names_raw(&[module_entry()], &absolute).0;
@@ -171,20 +162,13 @@ fn compares_public_symbols_with_dbghelp_on_a_real_dump() {
 
     let ours = addresses
         .iter()
-        .map(|(_, rva)| {
-            index.find(*rva).map(|hit| Resolution { name: hit.entry.name.clone(), displacement: hit.displacement })
-        })
+        .map(|(_, rva)| index.find(*rva).map(|hit| Resolution { name: hit.entry.name.clone(), displacement: hit.displacement }))
         .collect::<Vec<_>>();
 
-    let (raw_totals, raw_mismatches) = report_comparison("source spelling (primary gate)", &resolve(dbghelp_raw), &ours, &addresses, frame_count, &aliases);
-    let (normalized_totals, _) = report_comparison(
-        "undecorated (product path)",
-        &resolve(dbghelp_normalized),
-        &ours,
-        &addresses,
-        frame_count,
-        &aliases,
-    );
+    let (raw_totals, raw_mismatches) =
+        report_comparison("source spelling (primary gate)", &resolve(dbghelp_raw), &ours, &addresses, frame_count, &aliases);
+    let (normalized_totals, _) =
+        report_comparison("undecorated (product path)", &resolve(dbghelp_normalized), &ours, &addresses, frame_count, &aliases);
     print_mismatches(&raw_mismatches, &raw_totals);
 
     println!(
@@ -203,12 +187,7 @@ fn compares_public_symbols_with_dbghelp_on_a_real_dump() {
         100.0 * normalized_matched as f64 / normalized_compared.max(1) as f64
     );
 
-    assert!(
-        rate >= 0.99,
-        "source-spelling consistency {:.4}% is below the 99% gate, verdicts: {:?}",
-        rate * 100.0,
-        raw_totals
-    );
+    assert!(rate >= 0.99, "source-spelling consistency {:.4}% is below the 99% gate, verdicts: {:?}", rate * 100.0, raw_totals);
 }
 
 fn resolve(symbols: Vec<Option<symbols::ResolvedSymbol>>) -> Vec<Option<Resolution>> {
@@ -251,7 +230,8 @@ fn report_comparison(
 fn print_mismatches(mismatches: &[Mismatch], totals: &BTreeMap<Verdict, usize>) {
     println!("\n{:<18} {:<10} {:<40} {:<40} {:<10} {:>7}", "address", "rva", "dbghelp", "pdb", "verdict", "aliases");
     for mismatch in mismatches.iter().take(MAX_ROWS) {
-        let left = mismatch.dbghelp.as_ref().map_or("-".to_string(), |resolution| format!("{}+0x{:X}", resolution.name, resolution.displacement));
+        let left =
+            mismatch.dbghelp.as_ref().map_or("-".to_string(), |resolution| format!("{}+0x{:X}", resolution.name, resolution.displacement));
         let right = mismatch.pdb.as_ref().map_or("-".to_string(), |resolution| format!("{}+0x{:X}", resolution.name, resolution.displacement));
         println!(
             "0x{:016X} 0x{:08X} {:<40} {:<40} {:<10} {:>7}",

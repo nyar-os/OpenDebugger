@@ -10,8 +10,7 @@
 //! carrying a stable code. No path returns an empty result to stand in for a format this code
 //! does not understand.
 
-use std::fmt;
-use std::path::Path;
+use std::{fmt, path::Path};
 
 use serde::Serialize;
 
@@ -151,12 +150,16 @@ impl PdbFile {
     pub fn open(path: &Path) -> Result<Self, PdbError> {
         let mut msf = Msf::open(path)?;
         let info_stream = msf.read_stream(INFO_STREAM).map_err(|error| match error.kind() {
-            PdbErrorKind::OutOfRange => PdbError::new(PdbErrorKind::UnsupportedContainer, format!("stream 1 must hold the PDB info stream but {error}")),
+            PdbErrorKind::OutOfRange => {
+                PdbError::new(PdbErrorKind::UnsupportedContainer, format!("stream 1 must hold the PDB info stream but {error}"))
+            }
             other => PdbError::new(other, error.detail()),
         })?;
         let info = info::parse(&info_stream)?;
         let dbi_stream = msf.read_stream(DBI_STREAM).map_err(|error| match error.kind() {
-            PdbErrorKind::OutOfRange => PdbError::new(PdbErrorKind::UnsupportedContainer, format!("stream 3 must hold the DBI stream but {error}")),
+            PdbErrorKind::OutOfRange => {
+                PdbError::new(PdbErrorKind::UnsupportedContainer, format!("stream 3 must hold the DBI stream but {error}"))
+            }
             other => PdbError::new(other, error.detail()),
         })?;
         let dbi = dbi::parse_header(&dbi_stream)?;
@@ -266,17 +269,8 @@ mod tests {
         let named_index = 8;
         let info = fixtures::info_stream(20_000_404, &[("/names", named_index)]);
         let dbi = fixtures::dbi_stream(4, 5, 6);
-        let bytes = fixtures::container(&[
-            None,
-            Some(info),
-            None,
-            Some(dbi),
-            None,
-            Some(vec![0; 32]),
-            Some(vec![0; 64]),
-            None,
-            Some(vec![0; 16]),
-        ]);
+        let bytes =
+            fixtures::container(&[None, Some(info), None, Some(dbi), None, Some(vec![0; 32]), Some(vec![0; 64]), None, Some(vec![0; 16])]);
         let path = fixtures::write(&bytes, "stream-roles");
         let pdb = PdbFile::open(&path).expect("the synthetic container carries an info stream and a DBI header");
         std::fs::remove_file(&path).ok();
