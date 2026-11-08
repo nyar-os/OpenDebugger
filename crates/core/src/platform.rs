@@ -83,7 +83,7 @@ pub fn capabilities() -> Capabilities {
         "the Windows debug engine is available on Windows only"
     };
     let stack_detail = if windows {
-        "a triage dump carries no unwind metadata, so trusted frames come from the faulting context, verified call sites and a strictly validated frame-pointer chain, and unverified stack words are reported separately as guesses"
+        "the faulting context and a heuristic frame-pointer chain are recovered, full unwind is not implemented"
     }
     else {
         "the Windows debug engine is available on Windows only"
@@ -180,6 +180,17 @@ mod tests {
         else {
             assert_eq!(entry.code, Some(CapabilityState::UnsupportedPlatform));
             assert!(!entry.available);
+        }
+    }
+
+    #[test]
+    fn stack_unwind_stays_blocked_and_names_only_what_exists() {
+        let report = capabilities();
+        let entry = report.entries.iter().find(|entry| entry.capability == CAP_STACK_UNWIND).expect("entry");
+        assert!(!entry.available);
+        assert_eq!(entry.code, Some(if cfg!(windows) { CapabilityState::NotImplemented } else { CapabilityState::UnsupportedPlatform }));
+        if cfg!(windows) {
+            assert!(entry.detail.contains("not implemented"));
         }
     }
 }
