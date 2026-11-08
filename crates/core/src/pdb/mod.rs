@@ -21,6 +21,7 @@ mod lookup;
 mod module;
 mod msf;
 mod publics;
+mod undecorate;
 
 #[cfg(test)]
 mod conformance;
@@ -33,6 +34,7 @@ pub use lookup::{FunctionEntry, FunctionHit, FunctionIndex};
 pub use module::{ModuleFunction, ModuleSymbols, S_GPROC32, S_GPROC32_ID, S_LPROC32, S_LPROC32_ID};
 pub use msf::Msf;
 pub use publics::{PublicSymbol, PublicSymbolTable, PublicsHeader};
+pub use undecorate::undecorate;
 
 /// Stream numbers fixed by the MSF 7.00 layout.
 const OLD_DIRECTORY_STREAM: u32 = 0;

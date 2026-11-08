@@ -241,8 +241,8 @@ fn print_mismatches(mismatches: &[Mismatch], totals: &BTreeMap<Verdict, usize>) 
             "0x{:016X} 0x{:08X} {:<40} {:<40} {:<10} {:>7}",
             mismatch.address,
             mismatch.rva,
-            truncate(&left),
-            truncate(&right),
+            truncate(&left, 40),
+            truncate(&right, 40),
             format!("{:?}", mismatch.verdict),
             mismatch.aliases
         );
@@ -255,9 +255,8 @@ fn print_mismatches(mismatches: &[Mismatch], totals: &BTreeMap<Verdict, usize>) 
     }
 }
 
-fn truncate(text: &str) -> String {
-    const WIDTH: usize = 40;
-    if text.len() <= WIDTH { text.to_string() } else { format!("{}…", &text[..WIDTH - 1]) }
+fn truncate(text: &str, width: usize) -> String {
+    if text.len() <= width { text.to_string() } else { format!("{}…", &text[..width - 1]) }
 }
 
 /// Checks the DBI module list, section contributions and section map against the image and the
@@ -366,4 +365,137 @@ fn matches_the_module_and_section_tables_of_a_real_image() {
         );
     }
     println!("contributions cover {} of {} image sections", covered.len(), sections.len());
+}
+
+/// Asks `dbghelp` to undecorate names, so the in-tree undecorator can be checked against it.
+///
+/// Only tests call this. The product path reads names from the PDB alone, so this binding must
+/// disappear with the rest of `dbghelp` once the runtime switch lands.
+#[cfg(windows)]
+fn undecorate_with_oracle(names: &[&str]) -> Vec<Option<String>> {
+    use std::{ffi::c_void, os::windows::ffi::OsStrExt};
+
+    type UnDecorateSymbolName = unsafe extern "system" fn(*const u8, *mut u8, u32, u32) -> u32;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn LoadLibraryW(name: *const u16) -> *mut c_void;
+        fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
+    }
+
+    let library = std::ffi::OsStr::new("dbghelp.dll").encode_wide().chain(Some(0)).collect::<Vec<_>>();
+    // SAFETY: the wide string is NUL terminated and lives for the call.
+    let module = unsafe { LoadLibraryW(library.as_ptr()) };
+    if module.is_null() {
+        return vec![None; names.len()];
+    }
+    let address = unsafe { GetProcAddress(module, c"UnDecorateSymbolName".as_ptr().cast::<u8>()) };
+    if address.is_null() {
+        return vec![None; names.len()];
+    }
+    // SAFETY: `dbghelp` exports `UnDecorateSymbolName` with this documented signature.
+    let undecorate: UnDecorateSymbolName = unsafe { std::mem::transmute(address) };
+    names
+        .iter()
+        .map(|name| {
+            let mut output = [0u8; 16_384];
+            // SAFETY: input is NUL terminated by the caller's `CString` and the output buffer is sized.
+            let written = unsafe { undecorate(name.as_ptr(), output.as_mut_ptr().cast::<u8>(), output.len() as u32, 0) };
+            if written == 0 {
+                return None;
+            }
+            // The documented return is the character count, but a failed call can leave the buffer
+            // untouched, so the terminator is what decides the text actually produced.
+            let end = output.iter().take(written as usize).position(|byte| *byte == 0).unwrap_or(written as usize);
+            Some(String::from_utf8_lossy(&output[..end]).into_owned())
+        })
+        .collect()
+}
+
+/// Compares the in-tree undecorator with `dbghelp` over every decorated public symbol of a real PDB.
+///
+/// Undecoration is a rendering rule, not an address lookup, so the whole name list is compared
+/// instead of the sampled addresses. A name the in-tree parser declines keeps its stored spelling,
+/// which is a coverage gap rather than a wrong answer, so the report separates the two.
+#[cfg(windows)]
+#[test]
+#[ignore = "requires OPEN_DEBUGGER_REAL_PDB"]
+fn compares_the_undecorator_with_dbghelp_on_a_real_pdb() {
+    use std::ffi::CString;
+
+    let pdb = std::env::var("OPEN_DEBUGGER_REAL_PDB").expect("set OPEN_DEBUGGER_REAL_PDB to the matching PDB");
+    let mut pdb_file = PdbFile::open(Path::new(&pdb)).expect("open the real PDB");
+    let table = pdb_file.public_symbols().expect("read the public symbols");
+
+    let names = table
+        .symbols
+        .iter()
+        .map(|symbol| symbol.name.as_str())
+        .filter(|name| name.starts_with('?'))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    println!("{} public symbols, {} distinct decorated names", table.symbols.len(), names.len());
+
+    let mut same = 0usize;
+    let mut literals = Vec::new();
+    let mut declined = Vec::new();
+    let mut wrong = Vec::new();
+    for chunk in names.chunks(512) {
+        let owned = chunk.iter().map(|name| CString::new(name.as_str()).expect("names are NUL free")).collect::<Vec<_>>();
+        let borrowed = owned.iter().map(|name| name.to_str().expect("names are ASCII")).collect::<Vec<_>>();
+        let oracle = undecorate_with_oracle(&borrowed);
+        for (name, expected) in chunk.iter().zip(oracle) {
+            let ours = crate::pdb::undecorate(name);
+            match (ours, expected) {
+                (Some(ours), Some(expected)) if ours == expected => same += 1,
+                // `dbghelp` renders a literal with a mangled scope prefix it cannot read, so the
+                // placeholder is the answer on both sides and only the prefix differs.
+                (Some(ours), Some(expected)) if ours == "`string'" && expected.contains("`string'") => literals.push(name.clone()),
+                (None, _) => declined.push(name.clone()),
+                (Some(ours), expected) => wrong.push((name.clone(), ours, expected.unwrap_or_else(|| "<none>".to_string()))),
+            }
+        }
+    }
+
+    println!(
+        "identical: {same}\nliteral placeholder: {}\ndeclined: {}\nsome answer dbghelp does not give: {}",
+        literals.len(),
+        declined.len(),
+        wrong.len()
+    );
+    let named = wrong.iter().filter(|row| row.1.split('(').next() == row.2.split('(').next()).count();
+    println!("  of those, the function name itself agrees and only the signature differs: {named}");
+    let mut shapes = BTreeMap::<String, Vec<&(String, String, String)>>::new();
+    for row in &wrong {
+        shapes.entry(shape(&row.0)).or_default().push(row);
+    }
+    println!("\n{:<12} {:>6}  example", "shape", "count");
+    for (shape, rows) in &shapes {
+        let example = rows.first().expect("a shape holds at least one name");
+        println!("{shape:<12} {:>6}  {}", rows.len(), truncate(&example.0, 40));
+    }
+    println!();
+    for row in wrong.iter().take(MAX_ROWS) {
+        println!("{}\n  ours:    {}\n  dbghelp: {}", row.0, row.1, row.2);
+    }
+    let mut gaps = BTreeMap::<String, Vec<&String>>::new();
+    for name in &declined {
+        gaps.entry(shape(name)).or_default().push(name);
+    }
+    println!("\n{:<12} {:>6}  declined example", "shape", "count");
+    for (shape, rows) in &gaps {
+        let name = rows.first().expect("a shape holds at least one name");
+        let owned = CString::new(name.as_str()).expect("names are NUL free");
+        let can_be =
+            undecorate_with_oracle(&[owned.to_str().expect("names are ASCII")]).pop().flatten().unwrap_or_else(|| "<none>".to_string());
+        println!("{shape:<12} {:>6}  {}\n{:<20}  {}", rows.len(), truncate(name, 60), "", truncate(&can_be, 160));
+    }
+}
+
+/// The bytes that follow the symbol's scope chain, which is what selects the record grammar.
+fn shape(name: &str) -> String {
+    let tail = name.rfind("@@").map(|at| &name[at + 2..]).unwrap_or(name);
+    tail.chars().take(4).collect()
 }
