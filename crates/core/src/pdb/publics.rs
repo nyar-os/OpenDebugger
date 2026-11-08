@@ -112,12 +112,13 @@ pub fn parse_header(bytes: &[u8], stream_len: u32) -> Result<PublicsHeader, PdbE
     Ok(PublicsHeader { sym_hash, addr_map, num_thunks, size_of_thunk, isect_thunk_table, off_thunk_table, num_sections })
 }
 
-/// Walks every CodeView record and collects the `S_PUB32` entries.
+/// Byte offset of every CodeView record in the stream.
 ///
 /// A record occupies `2 + length` bytes: the length field itself is not counted, the record kind
-/// is.
-pub fn scan_symbols(records: &[u8]) -> Result<Vec<PublicSymbol>, PdbError> {
-    let mut symbols = Vec::new();
+/// is. The walk is the one address lookup uses, so an offset this returns is a record start rather
+/// than a byte inside one, which is what lets a reference be checked against it.
+pub(crate) fn record_starts(records: &[u8]) -> Result<Vec<usize>, PdbError> {
+    let mut starts = Vec::new();
     let mut cursor = 0usize;
     while cursor < records.len() {
         let remainder = records.len() - cursor;
@@ -128,7 +129,6 @@ pub fn scan_symbols(records: &[u8]) -> Result<Vec<PublicSymbol>, PdbError> {
             ));
         }
         let length = usize::from(u16::from_le_bytes([records[cursor], records[cursor + 1]]));
-        let kind = u16::from_le_bytes([records[cursor + 2], records[cursor + 3]]);
         let total = length + 2;
         if length < 2 || total > remainder {
             return Err(PdbError::new(
@@ -136,10 +136,21 @@ pub fn scan_symbols(records: &[u8]) -> Result<Vec<PublicSymbol>, PdbError> {
                 format!("symbol record at offset {cursor} declares {length} body bytes with {remainder} left"),
             ));
         }
-        if kind == S_PUB32 {
-            symbols.push(read_public(records, cursor, length)?);
-        }
+        starts.push(cursor);
         cursor += total;
+    }
+    Ok(starts)
+}
+
+/// Walks every CodeView record and collects the `S_PUB32` entries.
+pub fn scan_symbols(records: &[u8]) -> Result<Vec<PublicSymbol>, PdbError> {
+    let mut symbols = Vec::new();
+    for start in record_starts(records)? {
+        let length = usize::from(u16::from_le_bytes([records[start], records[start + 1]]));
+        let kind = u16::from_le_bytes([records[start + 2], records[start + 3]]);
+        if kind == S_PUB32 {
+            symbols.push(read_public(records, start, length)?);
+        }
     }
     if symbols.is_empty() {
         return Err(PdbError::new(

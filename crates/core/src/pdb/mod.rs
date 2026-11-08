@@ -2,10 +2,13 @@
 //!
 //! A kernel PDB is an MSF container of numbered streams. Function names come from the public
 //! symbol records, which carry a section number and an offset inside that section. This module
-//! reads the container, the PDB info stream, the DBI header fields that name the public symbol and
-//! symbol record streams, the DBI module list, section contributions and section map, and the
-//! per-module symbol streams that record each procedure's byte length. Type information, variables
-//! and source lines are not read.
+//! reads the container, the PDB info stream, the DBI header fields that name the global symbol
+//! hash, public symbol and symbol record streams, the DBI module list, section contributions and
+//! section map, and the per-module symbol streams that record each procedure's byte length. Type
+//! information, variables and source lines are not read.
+//!
+//! The global symbol hash is validated, not consumed: address lookup goes through the public
+//! symbol records, so no name in this product is resolved through that hash table.
 //!
 //! Every unrecognized container shape, PDB version or stream convention is a structured error
 //! carrying a stable code. No path returns an empty result to stand in for a format this code
@@ -16,6 +19,7 @@ use std::{fmt, path::Path};
 use serde::Serialize;
 
 mod dbi;
+mod globals;
 mod info;
 mod lookup;
 mod module;
@@ -29,6 +33,7 @@ mod conformance;
 mod fixtures;
 
 pub use dbi::{DbiHeader, DebugInfo, ModuleInfo, ModulePlacement, SectionContribution, SectionMapEntry};
+pub use globals::{GSI_SIGNATURE, GSI_VERSION_70, GSI_VERSION_80, GlobalsHash, GlobalsHeader, GlobalsReference};
 pub use info::PdbInfo;
 pub use lookup::{FunctionEntry, FunctionHit, FunctionIndex};
 pub use module::{ModuleFunction, ModuleSymbols, S_GPROC32, S_GPROC32_ID, S_LPROC32, S_LPROC32_ID};
@@ -236,6 +241,30 @@ impl PdbFile {
         publics::load(&public_stream, &records)
     }
 
+    /// Validates the global symbol hash stream the DBI header names.
+    ///
+    /// The hash table indexes records in the symbol record stream, so both streams are read and
+    /// every reference is checked against the record starts. Nothing here resolves a name: the
+    /// product looks addresses up through the public symbol records, which is why this table is
+    /// only a format check.
+    pub fn globals(&mut self) -> Result<GlobalsHash, PdbError> {
+        let index = self.dbi.global_stream;
+        if index == 0 {
+            return Err(PdbError::new(
+                PdbErrorKind::UnknownStreamConvention,
+                "the DBI header names no global symbol hash stream, so there is no hash table to validate",
+            ));
+        }
+        let hash = self.read_stream(u32::from(index)).map_err(|error| match error.kind() {
+            PdbErrorKind::OutOfRange => {
+                PdbError::new(PdbErrorKind::OutOfRange, format!("the DBI header points the global symbol hash at stream {index} but {error}"))
+            }
+            other => PdbError::new(other, error.detail()),
+        })?;
+        let records = self.read_stream(u32::from(self.dbi.symbol_record_stream))?;
+        globals::load(&hash, &records)
+    }
+
     /// Reads the module list, section contributions and section map the DBI stream declares.
     ///
     /// The module list is the link-time list of compiler object files, not the loader's module
@@ -402,6 +431,28 @@ mod tests {
             *byte = 0xA0 + index as u8;
         }
         assert_eq!(info::guid_text(&guid), "A3A2A1A0A5A4A7A6A8A9AAABACADAEAF");
+    }
+
+    /// Validates the global symbol hash of a real PDB, so the header fields and the reference
+    /// records are checked against a file the link tools wrote rather than a fixture.
+    #[test]
+    #[ignore = "requires OPEN_DEBUGGER_REAL_PDB to point at a real Windows PDB"]
+    fn validates_the_global_symbol_hash_of_a_real_kernel_pdb() {
+        let path = std::env::var_os("OPEN_DEBUGGER_REAL_PDB").expect("set OPEN_DEBUGGER_REAL_PDB to a real PDB");
+        let mut pdb = PdbFile::open(Path::new(&path)).expect("open the real PDB");
+        let hash = pdb.globals().expect("the DBI header names a parsable global symbol hash");
+        println!(
+            "global symbol hash: version 0x{:08X}, {} references, {} buckets",
+            hash.header.version,
+            hash.header.reference_count(),
+            hash.header.bucket_count()
+        );
+        println!("  first reference {:?}, last {:?}", hash.references.first(), hash.references.last());
+
+        assert_eq!(hash.header.version, GSI_VERSION_80);
+        assert!(hash.header.reference_count() > 1000, "a kernel PDB indexes thousands of records, got {}", hash.header.reference_count());
+        assert_eq!(hash.references.len(), hash.header.reference_count());
+        assert!(hash.references.iter().all(|reference| reference.reference_count > 0), "every validated reference is live");
     }
 
     /// Lists the directory of a real PDB so the container and stream roles can be checked against
