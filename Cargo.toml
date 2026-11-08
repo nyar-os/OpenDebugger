@@ -17,4 +17,4 @@ repository = "https://github.com/nyar-os/OpenDebugger"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 open-debugger-core = { path = "crates/core" }
-wae = { git = "https://github.com/doki-land/wae-framework.git", rev = "b5d555cc9f492858c602b62c3bd46a6be69012d4" }
+wae = { git = "https://github.com/doki-land/wae-framework.git", rev = "66f5d003fec85e28503968fd0a6a271beef0f389" }

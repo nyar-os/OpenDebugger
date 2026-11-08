@@ -37,6 +37,12 @@ struct GuiState {
     host: WebViewHost,
 }
 
+/// What `openGui` did: open a fresh host or focus the live one.
+enum GuiOpenAction {
+    Opened(WebViewHost),
+    Focused,
+}
+
 struct DumpIpcHandler;
 
 impl IpcHandler for DumpIpcHandler {
@@ -385,6 +391,7 @@ fn open_gui(ctx: CallContext) -> Result<JsValue> {
     let mut url: Option<String> = None;
     let mut width = 1180;
     let mut height = 760;
+    let mut second_launch = "focus".to_string();
 
     if let Ok(arg) = ctx.arg(0)
         && !arg.is_undefined()?
@@ -394,6 +401,14 @@ fn open_gui(ctx: CallContext) -> Result<JsValue> {
         }
         content_dir = optional_string_prop(arg, "contentDir")?;
         url = optional_string_prop(arg, "url")?;
+        if let Some(value) = optional_string_prop(arg, "secondLaunch")? {
+            if value != "focus" && value != "reject" {
+                return Err(core_error(CoreError::message(format!(
+                    "window_config_invalid: `secondLaunch` must be `focus` or `reject`, got `{value}`"
+                ))));
+            }
+            second_launch = value;
+        }
         if let Ok(value) = arg.get_named("width")
             && value.type_of()? == sys::napi_number
         {
@@ -407,33 +422,47 @@ fn open_gui(ctx: CallContext) -> Result<JsValue> {
     }
 
     let params = json!({ "title": title.clone(), "contentDir": content_dir.clone(), "url": url.clone() });
-    let host = audit::run("gui-open", Mode::Execute, params, || {
-        let already_open = GUI.with(|slot| slot.borrow().as_ref().map(|state| state.host.is_alive()).unwrap_or(false));
-        if already_open {
-            return Err(CoreError::message("a debugger window is already open"));
-        }
-        let options = if let Some(dir) = content_dir.clone() {
-            OpenOptions::from_content_dir(dir, title.clone())
-        }
-        else if let Some(url) = url.clone() {
-            OpenOptions::from_url(url, title.clone())
-        }
-        else {
-            let dir = resolve_gui_dir().map_err(|error| CoreError::message(error.to_string()))?;
-            OpenOptions::from_content_dir(dir.display().to_string(), title.clone())
-        };
-        let mut options = options;
-        options.width = width;
-        options.height = height;
-        let host = WebViewHost::open(options, Box::new(DumpIpcHandler)).map_err(webview_error)?;
-        let summary = format!("window opened with {} backend", host.backend_name());
-        Ok((host, audit::Summary::new(1, summary)))
+    let action = audit::run("gui-open", Mode::Execute, params, || {
+        GUI.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if let Some(state) = slot.as_mut()
+                && state.host.is_alive()
+            {
+                if second_launch == "reject" {
+                    return Err(CoreError::message(
+                        "window_second_launch_rejected: a window is already open and `window.secondLaunch` is `reject`",
+                    ));
+                }
+                state.host.focus().map_err(webview_error)?;
+                return Ok((GuiOpenAction::Focused, audit::Summary::new(1, "window focused")));
+            }
+            // A host left in the slot without a live window is stale.
+            *slot = None;
+            let options = if let Some(dir) = content_dir.clone() {
+                OpenOptions::from_content_dir(dir, title.clone())
+            }
+            else if let Some(url) = url.clone() {
+                OpenOptions::from_url(url, title.clone())
+            }
+            else {
+                let dir = resolve_gui_dir().map_err(|error| CoreError::message(error.to_string()))?;
+                OpenOptions::from_content_dir(dir.display().to_string(), title.clone())
+            };
+            let mut options = options;
+            options.width = width;
+            options.height = height;
+            let host = WebViewHost::open(options, Box::new(DumpIpcHandler)).map_err(webview_error)?;
+            let summary = format!("window opened with {} backend", host.backend_name());
+            Ok((GuiOpenAction::Opened(host), audit::Summary::new(1, summary)))
+        })
     })
     .map_err(core_error)?;
 
-    GUI.with(|slot| {
-        *slot.borrow_mut() = Some(GuiState { host });
-    });
+    if let GuiOpenAction::Opened(host) = action {
+        GUI.with(|slot| {
+            *slot.borrow_mut() = Some(GuiState { host });
+        });
+    }
     ctx.env().undefined()
 }
 
