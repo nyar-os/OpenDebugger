@@ -25,7 +25,7 @@
         "typecheck": "tsc -p tsconfig.json --noEmit"
     },
     "dependencies": {
-        "@wae/commander": "0.0.0"
+        "@wae/commander": "0.0.6"
     },
     "optionalDependencies": {
         "@wae/open-debugger-win32-x64": "workspace:*"
