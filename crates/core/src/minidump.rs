@@ -25,6 +25,15 @@ const MAX_STREAMS: u32 = 256;
 const MAX_MODULES: u32 = 65_536;
 const MAX_STRING_BYTES: u32 = 32_768;
 
+/// Size of `MINIDUMP_THREAD` as Windows writes it: four `u32` fields, the `u64` TEB, the
+/// 16-byte `Stack` memory descriptor and the 8-byte `ThreadContext` location descriptor.
+/// The record size is confirmed against real dumps by `(stream size - 4) / thread count`.
+const THREAD_RECORD_SIZE: usize = 48;
+/// Cap on the stack bytes scanned for candidate return addresses.
+const MAX_STACK_SCAN_BYTES: u32 = 64 * 1024;
+/// Cap on the module-owned stack words reported as guesses.
+const MAX_STACK_GUESSES: usize = 64;
+
 /// Windows `DUMP_TYPE` values stored in the 64-bit kernel dump header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -206,9 +215,11 @@ pub struct DumpReport {
     pub exception: Option<ExceptionInfo>,
     pub modules: Vec<ModuleInfo>,
     pub threads: Vec<ThreadInfo>,
-    /// Frames recovered from the faulting context and crash stack; kernel triage dumps only.
+    /// Trusted frames: the faulting context of a kernel triage dump, or the exception address
+    /// of a user-mode dump when the module table names the module that owns it.
     pub stack: Vec<StackFrame>,
     /// Stack words that resolve into modules but cannot be verified. Never mixed into `stack`.
+    /// A user-mode dump contributes its exception thread's scanned stack here.
     pub stack_guesses: Vec<StackFrame>,
     /// Module bases observed as words on the crash stack, deduplicated by module and address.
     pub stack_module_bases: Vec<StackReference>,
@@ -291,6 +302,7 @@ fn parse_minidump(bytes: &Input) -> Result<DumpReport> {
 
     let mut report = DumpReport::new(DumpFormat::MiniDump, bytes.len());
     report.captured_at = read_u32(bytes, 20).filter(|value| *value > 0).and_then(|value| iso8601_from_unix_ms(i64::from(value) * 1000));
+    let mut thread_stacks: Vec<ThreadStack> = Vec::new();
 
     for index in 0..stream_count {
         let entry_rva = directory_rva as usize + index as usize * 12;
@@ -314,7 +326,10 @@ fn parse_minidump(bytes: &Input) -> Result<DumpReport> {
                 None => report.warnings.push("module list stream is malformed".to_string()),
             },
             STREAM_THREAD_LIST => match parse_thread_list(bytes, data_rva) {
-                Some(threads) => report.threads = threads,
+                Some((threads, stacks)) => {
+                    report.threads = threads;
+                    thread_stacks = stacks;
+                }
                 None => report.warnings.push("thread list stream is malformed".to_string()),
             },
             STREAM_EXCEPTION => match parse_exception(bytes, data_rva) {
@@ -332,7 +347,92 @@ fn parse_minidump(bytes: &Input) -> Result<DumpReport> {
     if report.bugcheck.is_none() {
         report.warnings.push("minidumps do not carry a bugcheck code; pass the code to `bugcheck` or use a kernel dump".to_string());
     }
+
+    if let Some(exception) = report.exception.clone()
+        && let Some(stack) = thread_stacks.into_iter().find(|entry| entry.thread_id == exception.thread_id)
+    {
+        // The module table is copied out so the scan can hold it while filling the report.
+        let modules = std::mem::take(&mut report.modules);
+        let started = Instant::now();
+        scan_thread_stack(bytes, &stack, &modules, &exception, &mut report);
+        report.timings.stack += started.elapsed().as_secs_f64() * 1000.0;
+        report.modules = modules;
+    }
     Ok(report)
+}
+
+/// The stack memory descriptor of one thread, read from the thread list.
+struct ThreadStack {
+    thread_id: u32,
+    size: u32,
+    rva: u32,
+}
+
+/// Scans the exception thread's stack and records the faulting instruction pointer plus the
+/// module-owned words as unverified references.
+///
+/// A user-mode minidump carries no frame metadata and no module images, so a word inside a
+/// module range is only a candidate return address: it lands in [`DumpReport::stack_guesses`]
+/// and never in the trusted stack. The exception address itself is a recorded fact, so it
+/// enters the trusted stack when the module table names its owner.
+fn scan_thread_stack(input: &Input, stack: &ThreadStack, modules: &[ModuleInfo], exception: &ExceptionInfo, report: &mut DumpReport) {
+    let ranges = module_ranges(modules);
+    if ranges.is_empty() {
+        return;
+    }
+
+    if let Some(value) = parse_hex64(&exception.address)
+        && let Some((base, _, name)) = ranges.iter().find(|(base, end, _)| value >= *base && value < *end)
+    {
+        report.stack.push(StackFrame {
+            address: exception.address.clone(),
+            module: Some(name.to_string()),
+            offset_in_module: Some(format!("0x{:X}", value - base)),
+            function: None,
+            function_offset: None,
+            source: StackFrameSource::Context,
+        });
+    }
+
+    let limit = stack.size.min(MAX_STACK_SCAN_BYTES);
+    let mut offset = 0u32;
+    while offset + 8 <= limit && report.stack_guesses.len() < MAX_STACK_GUESSES {
+        let Some(at) = stack.rva.checked_add(offset) else { break };
+        let Some(word) = read_u64(input, at) else { break };
+        if let Some((base, _, name)) = ranges.iter().find(|(base, end, _)| word >= *base && word < *end) {
+            let address = hex64(word);
+            // A repeated word is one run on the stack, not two references.
+            if report.stack_guesses.last().is_none_or(|last| last.address != address) {
+                report.stack_guesses.push(StackFrame {
+                    address,
+                    module: Some(name.to_string()),
+                    offset_in_module: Some(format!("0x{:X}", word - base)),
+                    function: None,
+                    function_offset: None,
+                    source: StackFrameSource::Scan,
+                });
+            }
+        }
+        offset += 8;
+    }
+}
+
+/// The parsed `(base, end, name)` range of every module. A malformed base is skipped rather
+/// than failing the scan.
+pub(crate) fn module_ranges(modules: &[ModuleInfo]) -> Vec<(u64, u64, &str)> {
+    modules
+        .iter()
+        .filter_map(|module| {
+            let base = parse_hex64(&module.base_address)?;
+            let end = base.checked_add(u64::from(module.size_bytes))?;
+            Some((base, end, module.name.as_str()))
+        })
+        .collect()
+}
+
+/// Reads the `0x`-prefixed or bare hex `u64` text the report fields carry.
+pub(crate) fn parse_hex64(text: &str) -> Option<u64> {
+    u64::from_str_radix(text.trim_start_matches("0x"), 16).ok()
 }
 
 fn parse_system_info(bytes: &Input, rva: u32) -> Option<SystemInfo> {
@@ -371,18 +471,25 @@ fn parse_module_list(bytes: &Input, rva: u32) -> Option<Vec<ModuleInfo>> {
     Some(modules)
 }
 
-fn parse_thread_list(bytes: &Input, rva: u32) -> Option<Vec<ThreadInfo>> {
+fn parse_thread_list(bytes: &Input, rva: u32) -> Option<(Vec<ThreadInfo>, Vec<ThreadStack>)> {
     let count = read_u32(bytes, rva)?;
     if count > 65_536 {
         return None;
     }
     let mut threads = Vec::with_capacity(count.min(4096) as usize);
+    let mut stacks = Vec::new();
     for index in 0..count {
-        let offset = rva as usize + 4 + index as usize * 48;
+        let offset = rva as usize + 4 + index as usize * THREAD_RECORD_SIZE;
         let thread_id = read_u32(bytes, offset as u32)?;
         threads.push(ThreadInfo { thread_id });
+        // `MINIDUMP_THREAD.Stack`: the captured range starts at the current stack pointer.
+        let size = read_u32(bytes, (offset + 32) as u32).unwrap_or_default();
+        let stack_rva = read_u32(bytes, (offset + 36) as u32).unwrap_or_default();
+        if size > 0 {
+            stacks.push(ThreadStack { thread_id, size, rva: stack_rva });
+        }
     }
-    Some(threads)
+    Some((threads, stacks))
 }
 
 fn parse_exception(bytes: &Input, rva: u32) -> Option<ExceptionInfo> {
@@ -668,11 +775,16 @@ mod tests {
         let module_name = "ntoskrnl.exe";
         let module_name_size = 4 + module_name.len() * 2;
         let thread_list_rva = module_name_rva + module_name_size;
-        let thread_list_size = 4 + 48 * 2;
+        let thread_list_size = 4 + THREAD_RECORD_SIZE * 2;
         let exception_rva = thread_list_rva + thread_list_size;
         let exception_size = 168usize;
         let misc_rva = exception_rva + exception_size;
         let misc_size = 24usize;
+        // The exception thread's captured stack: a module word, a foreign word, a repeat of
+        // the first module word and a second module word.
+        let stack_rva = misc_rva + misc_size;
+        let stack_words = [0x0000_0001_4000_0010u64, 0xFFFF_0000_0000_0000, 0x0000_0001_4000_0010, 0x0000_0001_4000_0020];
+        let stack_size = stack_words.len() * 8;
 
         let mut fixture = Fixture { bytes: Vec::new() };
         fixture.push_u32(MINIDUMP_SIGNATURE);
@@ -738,11 +850,21 @@ mod tests {
         }
 
         fixture.push_u32(2);
-        for thread_id in [100u32, 200u32] {
-            fixture.push_u32(thread_id);
-            for _ in 0..11 {
-                fixture.push_u32(0);
-            }
+        // Thread 100 is the exception thread: its stack descriptor points at the blob below.
+        fixture.push_u32(100);
+        fixture.push_u32(0);
+        fixture.push_u32(0);
+        fixture.push_u32(0);
+        fixture.push_u64(0);
+        fixture.push_u64(0x0000_00AF_1234_0000);
+        fixture.push_u32(stack_size as u32);
+        fixture.push_u32(stack_rva as u32);
+        fixture.push_u32(0);
+        fixture.push_u32(0);
+        // Thread 200 carries no captured stack.
+        fixture.push_u32(200);
+        for _ in 0..11 {
+            fixture.push_u32(0);
         }
 
         fixture.push_u32(100);
@@ -750,7 +872,7 @@ mod tests {
         fixture.push_u32(0x8000_0003);
         fixture.push_u32(0);
         fixture.push_u64(0);
-        fixture.push_u64(0x0000_7FF9_1234_5678);
+        fixture.push_u64(0x0000_0001_4000_0042);
         fixture.push_u32(1);
         fixture.push_u32(0);
         fixture.push_u64(0x1234);
@@ -767,9 +889,13 @@ mod tests {
         fixture.push_u32(0);
         fixture.push_u32(0);
 
+        for word in stack_words {
+            fixture.push_u64(word);
+        }
+
         assert_eq!(
             fixture.bytes.len(),
-            data_base + system_size + module_list_size + module_name_size + thread_list_size + exception_size + misc_size
+            data_base + system_size + module_list_size + module_name_size + thread_list_size + exception_size + misc_size + stack_size
         );
         fixture.put_u32(0, MINIDUMP_SIGNATURE);
         fixture.put_u32(20, 1_700_000_000);
@@ -794,9 +920,20 @@ mod tests {
         assert_eq!(report.threads[1].thread_id, 200);
         let exception = report.exception.expect("exception");
         assert_eq!(exception.code, "0x80000003");
-        assert_eq!(exception.address, "0x00007FF912345678");
+        assert_eq!(exception.address, "0x0000000140000042");
         assert_eq!(exception.parameters, vec!["0x0000000000001234".to_string()]);
         assert_eq!(report.process_id, Some(4321));
+
+        let context = report.stack.first().expect("an exception address inside a module is a trusted frame");
+        assert_eq!(context.source, StackFrameSource::Context);
+        assert_eq!(context.module.as_deref(), Some("ntoskrnl.exe"));
+        assert_eq!(context.offset_in_module.as_deref(), Some("0x42"));
+
+        assert_eq!(report.stack_guesses.len(), 2, "the foreign word is no reference and the repeat is one run");
+        assert_eq!(report.stack_guesses[0].source, StackFrameSource::Scan);
+        assert_eq!(report.stack_guesses[0].module.as_deref(), Some("ntoskrnl.exe"));
+        assert_eq!(report.stack_guesses[0].offset_in_module.as_deref(), Some("0x10"));
+        assert_eq!(report.stack_guesses[1].offset_in_module.as_deref(), Some("0x20"));
     }
 
     #[test]

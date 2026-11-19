@@ -1,17 +1,20 @@
-//! Groups crashes from one machine by bugcheck code and by the module the trusted stack points at.
+//! Groups crashes from one machine by failure code and by the module the evidence points at.
 //!
 //! One dump answers "what happened in this crash". Repeated crashes need a different question:
-//! whether the same bugcheck keeps coming back through the same driver. This module answers it
-//! from facts the analyzer already produces, without inventing an attribution: a group is keyed
-//! by the bugcheck code plus the first non-platform module that owns a trusted frame, falling
-//! back to a module base seen on the stack, which is how a driver appears in a kernel-only stack.
+//! whether the same failure keeps coming back through the same module. This module answers it
+//! from facts the analyzer already produces, without inventing an attribution. A kernel dump
+//! groups by the bugcheck code plus the first non-platform module that owns a trusted frame,
+//! falling back to a module base seen on the stack, which is how a driver appears in a
+//! kernel-only stack. A user-mode dump carries neither, so it groups by the exception code plus
+//! the module that owns the exception address.
 //!
-//! Verified against synthetic observations only. A real multi-dump corpus is not available on
-//! the analysis host, so group counts from a single machine remain unverified.
+//! The kernel path is verified against synthetic observations; the user-mode grouping was added
+//! after a real CrashDumps corpus showed every application dump would otherwise collapse into
+//! one ownerless group.
 
 use serde::Serialize;
 
-use crate::minidump::DumpReport;
+use crate::minidump::{DumpReport, module_ranges, parse_hex64};
 
 /// Modules that belong to Windows itself. A frame in one of them says nothing about a driver.
 const PLATFORM_MODULES: &[&str] = &["ntoskrnl.exe", "ntkrnlmp.exe", "ntkrnlpa.exe", "hal.dll"];
@@ -24,6 +27,10 @@ pub struct CrashObservation {
     pub captured_at: Option<String>,
     pub bugcheck: Option<u32>,
     pub bugcheck_name: Option<String>,
+    /// Exception code of a user-mode crash, absent when the dump carries a bugcheck instead.
+    pub exception: Option<u32>,
+    /// Module that owns the exception address, when the module table names one.
+    pub faulting_module: Option<String>,
     /// Modules outside the platform set, in the order the dump exposed them.
     pub trigger_modules: Vec<String>,
 }
@@ -36,14 +43,18 @@ pub struct CrashOccurrence {
     pub captured_at: Option<String>,
 }
 
-/// Crashes that share a bugcheck code and a trigger module.
+/// Crashes that share a bugcheck or exception code and a trigger module.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CrashGroup {
     pub bugcheck: Option<u32>,
     pub bugcheck_hex: Option<String>,
     pub bugcheck_name: Option<String>,
-    /// Module the group is keyed by, absent when no trusted frame or stack word names one.
+    /// Exception code the group is keyed by, present when no bugcheck is.
+    pub exception: Option<u32>,
+    pub exception_hex: Option<String>,
+    /// Module the group is keyed by, absent when no trusted frame, stack word or exception
+    /// address names one.
     pub module: Option<String>,
     /// Every non-platform module seen across the grouped dumps.
     pub modules: Vec<String>,
@@ -60,21 +71,27 @@ pub fn observe(path: &str, report: &DumpReport) -> CrashObservation {
     for reference in &report.stack_module_bases {
         push_trigger(&mut trigger_modules, Some(reference.module.as_str()));
     }
+    let faulting_module = report.exception.as_ref().and_then(|exception| {
+        let value = parse_hex64(&exception.address)?;
+        module_ranges(&report.modules).into_iter().find(|(base, end, _)| value >= *base && value < *end).map(|(_, _, name)| name.to_string())
+    });
     CrashObservation {
         path: path.to_string(),
         captured_at: report.captured_at.clone(),
         bugcheck: report.bugcheck.as_ref().map(|bugcheck| bugcheck.code),
         bugcheck_name: report.bugcheck.as_ref().and_then(|bugcheck| bugcheck.name).map(str::to_string),
+        exception: report.exception.as_ref().map(|exception| exception.code_value),
+        faulting_module,
         trigger_modules,
     }
 }
 
-/// Groups observations by bugcheck code and first trigger module, largest group first.
+/// Groups observations by bugcheck or exception code and trigger module, largest group first.
 pub fn aggregate(observations: &[CrashObservation]) -> Vec<CrashGroup> {
     let mut groups: Vec<CrashGroup> = Vec::new();
     for observation in observations {
-        let module = observation.trigger_modules.first().cloned();
-        let existing = groups.iter().position(|group| group.bugcheck == observation.bugcheck && group.module == module);
+        let module = observation.trigger_modules.first().cloned().or_else(|| observation.faulting_module.clone());
+        let existing = groups.iter().position(|group| group.bugcheck == observation.bugcheck && group.exception == observation.exception && group.module == module);
         let index = match existing {
             Some(index) => index,
             None => {
@@ -82,6 +99,8 @@ pub fn aggregate(observations: &[CrashObservation]) -> Vec<CrashGroup> {
                     bugcheck: observation.bugcheck,
                     bugcheck_hex: observation.bugcheck.map(|code| format!("0x{code:08X}")),
                     bugcheck_name: observation.bugcheck_name.clone(),
+                    exception: observation.exception,
+                    exception_hex: observation.exception.map(|code| format!("0x{code:08X}")),
                     module,
                     modules: Vec::new(),
                     count: 0,
@@ -99,7 +118,9 @@ pub fn aggregate(observations: &[CrashObservation]) -> Vec<CrashGroup> {
         }
         group.dumps.push(CrashOccurrence { path: observation.path.clone(), captured_at: observation.captured_at.clone() });
     }
-    groups.sort_by(|left, right| right.count.cmp(&left.count).then(left.bugcheck.cmp(&right.bugcheck)).then(left.module.cmp(&right.module)));
+    groups.sort_by(|left, right| {
+        right.count.cmp(&left.count).then(left.bugcheck.cmp(&right.bugcheck)).then(left.exception.cmp(&right.exception)).then(left.module.cmp(&right.module))
+    });
     groups
 }
 
@@ -127,8 +148,39 @@ mod tests {
             captured_at: None,
             bugcheck,
             bugcheck_name: None,
+            exception: None,
+            faulting_module: None,
             trigger_modules: modules.iter().map(|module| module.to_string()).collect(),
         }
+    }
+
+    fn user_observation(path: &str, exception: u32, faulting: Option<&str>) -> CrashObservation {
+        CrashObservation {
+            path: path.to_string(),
+            captured_at: None,
+            bugcheck: None,
+            bugcheck_name: None,
+            exception: Some(exception),
+            faulting_module: faulting.map(str::to_string),
+            trigger_modules: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn user_mode_crashes_group_by_exception_and_faulting_module() {
+        let observations = [
+            user_observation("a.dmp", 0xC0000005, Some("nvwgf2umx.dll")),
+            user_observation("b.dmp", 0xC0000005, Some("nvwgf2umx.dll")),
+            user_observation("c.dmp", 0xC0000005, Some("libgallium.dll")),
+            user_observation("d.dmp", 0xC00000FD, Some("nvwgf2umx.dll")),
+            user_observation("e.dmp", 0xC0000005, None),
+        ];
+        let groups = aggregate(&observations);
+        assert_eq!(groups.len(), 4, "code and faulting module together key the group, and an ownerless dump stands apart");
+        assert_eq!(groups[0].count, 2);
+        assert_eq!(groups[0].exception_hex.as_deref(), Some("0xC0000005"));
+        assert_eq!(groups[0].module.as_deref(), Some("nvwgf2umx.dll"));
+        assert!(groups.iter().all(|group| group.bugcheck.is_none()), "a user-mode group carries no bugcheck");
     }
 
     #[test]
