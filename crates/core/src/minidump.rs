@@ -1094,7 +1094,10 @@ mod tests {
             "every analysis phase is measured"
         );
         assert!(timings.total >= timings.stack + timings.symbols, "the total covers at least the stack and symbol phases");
-        if cfg!(windows) {
+        // Symbol diagnostics need a store: a host without one warns instead of
+        // naming modules, and that is the correct behavior, so the claims
+        // below are only checkable where a store was found.
+        if report.symbols.store.is_some() {
             let missing = report
                 .symbols
                 .missing
@@ -1102,12 +1105,10 @@ mod tests {
                 .find(|entry| entry.module == "fake-1.sys")
                 .expect("a module that cannot be named must appear in the symbol diagnostics");
             assert_eq!(missing.timestamp, report.modules[1].timestamp);
-            if report.symbols.store.is_some() {
-                assert!(
-                    missing.fetch_command.as_deref().is_some_and(|command| command.starts_with("symchk /r")),
-                    "a module image missing from the store must carry a prefetch command"
-                );
-            }
+            assert!(
+                missing.fetch_command.as_deref().is_some_and(|command| command.starts_with("symchk /r")),
+                "a module image missing from the store must carry a prefetch command"
+            );
         }
         assert!(!report.warnings.iter().any(|warning| warning.starts_with("not_implemented")));
     }
