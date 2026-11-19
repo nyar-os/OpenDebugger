@@ -6,10 +6,11 @@
 //! it does not load, map or relocate anything.
 
 use std::{
-    fs::File,
     io::{Read, Seek, SeekFrom},
     path::Path,
 };
+
+use boost_fs::File;
 
 use crate::error::{Error, Result};
 

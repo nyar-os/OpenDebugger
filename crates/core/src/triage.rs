@@ -7,11 +7,12 @@
 //! descriptor and record is validated before it is used.
 
 use std::{
-    fs::File,
     io::{Read, Seek, SeekFrom},
     path::PathBuf,
     time::Instant,
 };
+
+use boost_fs::File;
 
 use crate::{
     input::{Input, read_u32, read_u64},

@@ -6,10 +6,11 @@
 //! to its declared size. Nothing here interprets stream contents.
 
 use std::{
-    fs::File,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
 };
+
+use boost_fs::File;
 
 use super::{PdbError, PdbErrorKind, word};
 

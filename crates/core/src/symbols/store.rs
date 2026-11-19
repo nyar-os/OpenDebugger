@@ -94,7 +94,7 @@ pub(crate) fn fetch_command(image: &Path, store: &Path) -> String {
 /// Finds a directory or file under `base`, ignoring case so a dump name and a store name
 /// that differ only in case still meet.
 fn child(base: &Path, name: &str) -> Option<PathBuf> {
-    std::fs::read_dir(base)
+    boost_fs::read_dir(base)
         .ok()?
         .flatten()
         .find_map(|entry| entry.file_name().to_string_lossy().eq_ignore_ascii_case(name).then(|| entry.path()))
@@ -109,7 +109,7 @@ fn child(base: &Path, name: &str) -> Option<PathBuf> {
 /// signature. The PDB name is taken from the file part of the recorded path, because the
 /// build machine path does not exist on the analysis host.
 pub(crate) fn code_view(image: &Path) -> Option<CodeView> {
-    let mut file = std::fs::File::open(image).ok()?;
+    let mut file = boost_fs::File::open(image).ok()?;
     let dos = read_at(&mut file, 0, 0x40)?;
     let pe = u64::from(read_u32(&dos, 0x3C)?);
     let coff = read_at(&mut file, pe, 24)?;
@@ -162,7 +162,7 @@ pub(crate) fn code_view(image: &Path) -> Option<CodeView> {
 
 /// Reads exactly `length` bytes at `offset`, so a malformed header cannot make the caller
 /// believe it owns more data than the file holds.
-fn read_at(file: &mut std::fs::File, offset: u64, length: usize) -> Option<Vec<u8>> {
+fn read_at(file: &mut boost_fs::File, offset: u64, length: usize) -> Option<Vec<u8>> {
     let mut buffer = vec![0u8; length];
     file.seek(SeekFrom::Start(offset)).ok()?;
     file.read_exact(&mut buffer).ok()?;

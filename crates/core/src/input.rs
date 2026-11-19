@@ -2,10 +2,11 @@
 
 use std::{
     cell::RefCell,
-    fs::File,
     io::{Read, Seek, SeekFrom},
     path::Path,
 };
+
+use boost_fs::File;
 
 use crate::error::{Error, Result};
 

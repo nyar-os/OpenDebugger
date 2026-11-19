@@ -3,7 +3,7 @@
 //! The CLI and the GUI both produce reports through this module so that the write is validated
 //! and audited at the capability boundary instead of happening ad hoc in the TypeScript layer.
 
-use std::{fs, path::Path};
+use std::path::Path;
 
 use serde::Serialize;
 
@@ -45,7 +45,7 @@ pub fn write_report(path: &Path, report: &DumpReport, dry_run: bool) -> Result<R
         return Err(Error::message(format!("{target}: report path is a directory")));
     }
     if !dry_run {
-        fs::write(path, text.as_bytes()).map_err(|source| Error::io(&target, source))?;
+        boost_fs::write(path, text.as_bytes()).map_err(|source| Error::io(&target, source))?;
     }
     Ok(ReportWrite { path: target, bytes: text.len(), dry_run })
 }
