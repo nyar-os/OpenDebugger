@@ -30,3 +30,6 @@ packages/open-debugger-ui/.cache/
 
 # Build staging
 packages/open-debugger/dist/
+
+# npm secrets (nifty)
+.secrets/
