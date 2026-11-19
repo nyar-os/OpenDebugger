@@ -6,11 +6,11 @@
     "description": "OpenDebugger workspace (crates = Rust, packages = TypeScript)",
     "license": "Apache-2.0",
     "scripts": {
-        "build:napi": "node --experimental-strip-types scripts/build-napi.ts",
+        "build:napi": "wae native build",
         "build:ts": "pnpm --filter @wae/open-debugger run build",
         "build:ui": "pnpm --filter @wae/open-debugger-ui run build && pnpm --filter @wae/open-debugger-ui run stage",
         "build": "pnpm run build:napi && pnpm run build:ts && pnpm run build:ui",
-        "stage:native": "node --experimental-strip-types scripts/stage-native.ts",
+        "stage:native": "wae native stage",
         "check:skills": "node --experimental-strip-types scripts/check-skills.ts",
         "check:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
         "gui": "pnpm run build && pnpm --filter @wae/open-debugger exec node ./dist/cli.js gui"
@@ -18,6 +18,7 @@
     "devDependencies": {
         "@doki-land/nifty": "^0.1.10",
         "@types/node": "^22.20.4",
+        "@wae/wae": "0.0.6",
         "typescript": "^5.9.2"
     }
 }
