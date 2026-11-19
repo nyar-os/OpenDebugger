@@ -397,8 +397,14 @@ fn scan_thread_stack(input: &Input, stack: &ThreadStack, modules: &[ModuleInfo],
     let limit = stack.size.min(MAX_STACK_SCAN_BYTES);
     let mut offset = 0u32;
     while offset + 8 <= limit && report.stack_guesses.len() < MAX_STACK_GUESSES {
-        let Some(at) = stack.rva.checked_add(offset) else { break };
-        let Some(word) = read_u64(input, at) else { break };
+        let Some(at) = stack.rva.checked_add(offset)
+        else {
+            break;
+        };
+        let Some(word) = read_u64(input, at)
+        else {
+            break;
+        };
         if let Some((base, _, name)) = ranges.iter().find(|(base, end, _)| word >= *base && word < *end) {
             let address = hex64(word);
             // A repeated word is one run on the stack, not two references.

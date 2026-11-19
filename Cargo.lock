@@ -273,7 +273,7 @@ dependencies = [
 
 [[package]]
 name = "open-debugger-core"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "boost-fs",
  "serde",
@@ -282,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "open-debugger-napi"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "open-debugger-core",
  "serde",

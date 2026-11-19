@@ -91,7 +91,9 @@ pub fn aggregate(observations: &[CrashObservation]) -> Vec<CrashGroup> {
     let mut groups: Vec<CrashGroup> = Vec::new();
     for observation in observations {
         let module = observation.trigger_modules.first().cloned().or_else(|| observation.faulting_module.clone());
-        let existing = groups.iter().position(|group| group.bugcheck == observation.bugcheck && group.exception == observation.exception && group.module == module);
+        let existing = groups
+            .iter()
+            .position(|group| group.bugcheck == observation.bugcheck && group.exception == observation.exception && group.module == module);
         let index = match existing {
             Some(index) => index,
             None => {
@@ -119,7 +121,12 @@ pub fn aggregate(observations: &[CrashObservation]) -> Vec<CrashGroup> {
         group.dumps.push(CrashOccurrence { path: observation.path.clone(), captured_at: observation.captured_at.clone() });
     }
     groups.sort_by(|left, right| {
-        right.count.cmp(&left.count).then(left.bugcheck.cmp(&right.bugcheck)).then(left.exception.cmp(&right.exception)).then(left.module.cmp(&right.module))
+        right
+            .count
+            .cmp(&left.count)
+            .then(left.bugcheck.cmp(&right.bugcheck))
+            .then(left.exception.cmp(&right.exception))
+            .then(left.module.cmp(&right.module))
     });
     groups
 }

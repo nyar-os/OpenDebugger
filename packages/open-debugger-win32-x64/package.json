@@ -1,6 +1,6 @@
 {
     "name": "@wae/open-debugger-win32-x64",
-    "version": "0.0.1",
+    "version": "0.0.2",
     "description": "Windows x64 native addon for @wae/open-debugger",
     "os": ["win32"],
     "cpu": ["x64"],

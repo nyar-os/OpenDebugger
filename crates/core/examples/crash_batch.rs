@@ -47,10 +47,16 @@ fn main() {
     let mut dumps: Vec<PathBuf> = Vec::new();
     let mut pending = vec![dir.clone()];
     while let Some(root) = pending.pop() {
-        let Ok(read) = boost_fs::read_dir(&root) else { continue };
+        let Ok(read) = boost_fs::read_dir(&root)
+        else {
+            continue;
+        };
         for entry in read.flatten() {
             let path = entry.path();
-            let Ok(meta) = entry.metadata() else { continue };
+            let Ok(meta) = entry.metadata()
+            else {
+                continue;
+            };
             if meta.is_dir() {
                 pending.push(path);
             }
@@ -97,7 +103,8 @@ fn main() {
         let items: Vec<serde_json::Value> = reports
             .iter()
             .map(|(file, report)| {
-                let mut value: serde_json::Value = serde_json::from_str(&encode_report(report).expect("the encoder emits valid JSON")).expect("valid JSON");
+                let mut value: serde_json::Value =
+                    serde_json::from_str(&encode_report(report).expect("the encoder emits valid JSON")).expect("valid JSON");
                 value["dumpPath"] = serde_json::Value::String(file.display().to_string());
                 value
             })
@@ -140,7 +147,10 @@ fn print_verdict(path: &std::path::Path, report: &DumpReport) {
     // The scanned chain is unverified, so it is shown as references, never as a stack.
     let mut seen = Vec::new();
     for guess in &report.stack_guesses {
-        let Some(module) = guess.module.as_ref().map(|name| name.rsplit(['\\', '/']).next().unwrap_or(name.as_str())) else { continue };
+        let Some(module) = guess.module.as_ref().map(|name| name.rsplit(['\\', '/']).next().unwrap_or(name.as_str()))
+        else {
+            continue;
+        };
         if seen.iter().any(|first: &String| first == module) {
             continue;
         }
@@ -159,6 +169,9 @@ fn print_verdict(path: &std::path::Path, report: &DumpReport) {
 
 fn in_module(module: &open_debugger_core::ModuleInfo, address: &str) -> bool {
     let parse = |text: &str| u64::from_str_radix(text.trim_start_matches("0x"), 16).ok();
-    let (Some(value), Some(base)) = (parse(address), parse(&module.base_address)) else { return false };
+    let (Some(value), Some(base)) = (parse(address), parse(&module.base_address))
+    else {
+        return false;
+    };
     value >= base && value < base + u64::from(module.size_bytes)
 }

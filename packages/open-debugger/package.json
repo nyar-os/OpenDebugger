@@ -1,6 +1,6 @@
 {
     "name": "@wae/open-debugger",
-    "version": "0.0.1",
+    "version": "0.0.2",
     "description": "Windows crash dump analysis with bugcheck, module and report output",
     "type": "module",
     "main": "./dist/index.js",
